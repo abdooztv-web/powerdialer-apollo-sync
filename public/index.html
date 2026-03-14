@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PD × Apollo — Admin Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="layout">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-icon">PD</div>
+        <div class="logo-text">
+          <span class="logo-title">PowerDialer</span>
+          <span class="logo-sub">× Apollo Sync</span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#overview" class="nav-item active">Dashboard</a>
+        <a href="#activity" class="nav-item">Activity Log</a>
+        <a href="#test" class="nav-item">Test Webhook</a>
+      </nav>
+
+      <div class="sidebar-status">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-label" id="statusLabel">Checking...</span>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main">
+      <header class="page-header" id="overview">
+        <div>
+          <h1>Admin Dashboard</h1>
+          <p class="header-sub">PowerDialer → Apollo.io sync monitor</p>
+        </div>
+        <div class="header-actions">
+          <span class="last-updated" id="lastUpdated">—</span>
+          <button class="btn-outline" id="btnRefresh">↻ Refresh</button>
+        </div>
+      </header>
+
+      <!-- STAT CARDS -->
+      <section class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon stat-icon--total">⚡</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statTotal">0</div>
+            <div class="stat-label">Total Webhooks</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon stat-icon--added">+</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statAdded">0</div>
+            <div class="stat-label">Added to Sequence</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon stat-icon--removed">−</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statRemoved">0</div>
+            <div class="stat-label">Removed</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon stat-icon--noaction">○</div>
+          <div class="stat-body">
+            <div class="stat-value" id="statNoAction">0</div>
+            <div class="stat-label">No Action</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACTIVITY TABLE -->
+      <section class="card" id="activity">
+        <div class="card-header">
+          <h2>Recent Activity</h2>
+          <span class="card-sub">Last 100 events · auto-refreshes every 10s</span>
+        </div>
+        <div class="table-wrapper">
+          <table class="activity-table">
+            <thead>
+              <tr>
+                <th>Contact</th>
+                <th>Disposition</th>
+                <th>Action</th>
+                <th>Sequence</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="activityBody">
+              <tr class="empty-row">
+                <td colspan="5">No activity yet — waiting for webhooks</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- TEST FORM -->
+      <section class="card" id="test">
+        <div class="card-header">
+          <h2>Test Webhook</h2>
+          <span class="card-sub">Send a simulated call disposition</span>
+        </div>
+        <form class="test-form" id="testForm">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="testEmail">Contact Email</label>
+              <input type="email" id="testEmail" placeholder="contact@church.org" required>
+            </div>
+            <div class="form-group">
+              <label for="testName">Contact Name</label>
+              <input type="text" id="testName" placeholder="Pastor John Smith">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="testDisposition">Disposition</label>
+              <select id="testDisposition">
+                <optgroup label="Add to Sequence">
+                  <option value="Interested">Interested</option>
+                  <option value="Very Interested">Very Interested</option>
+                  <option value="Hot Lead">Hot Lead</option>
+                  <option value="Callback Requested">Callback Requested</option>
+                  <option value="Callback">Callback</option>
+                </optgroup>
+                <optgroup label="Remove from Sequences">
+                  <option value="Not Interested">Not Interested</option>
+                  <option value="Wrong Number">Wrong Number</option>
+                  <option value="Invalid Number">Invalid Number</option>
+                  <option value="Meeting Scheduled">Meeting Scheduled</option>
+                  <option value="Demo Scheduled">Demo Scheduled</option>
+                </optgroup>
+                <optgroup label="No Action">
+                  <option value="Left Voicemail">Left Voicemail</option>
+                  <option value="No Answer">No Answer</option>
+                  <option value="Busy">Busy</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="form-group form-group--btn">
+              <label>&nbsp;</label>
+              <button type="submit" class="btn-primary" id="btnSubmit">Send Test Webhook</button>
+            </div>
+          </div>
+          <div class="form-result" id="formResult" style="display:none"></div>
+        </form>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

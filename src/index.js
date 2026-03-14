@@ -1,23 +1,38 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { handleDisposition } = require('./handlers/disposition');
 const logger = require('./utils/logger');
+const { addEvent, getEvents, getStats } = require('./store');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Security middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'"]
+    }
+  }
+}));
 app.use(cors());
 app.use(express.json());
 
+// Serve dashboard UI
+app.use(express.static(path.join(__dirname, '../public')));
+
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use('/webhook', limiter);
 
@@ -27,6 +42,15 @@ app.get('/health', (req, res) => {
     status: 'ok',
     message: 'PowerDialer → Apollo sync is running',
     timestamp: new Date().toISOString()
+  });
+});
+
+// Activity API for dashboard
+app.get('/api/activity', (req, res) => {
+  res.json({
+    success: true,
+    stats: getStats(),
+    events: getEvents()
   });
 });
 
@@ -42,7 +66,6 @@ app.post('/webhook/powerdialer', async (req, res) => {
     timestamp
   });
 
-  // Validate required fields
   if (!contact_email || !disposition) {
     logger.error('❌ Missing required fields', { body: req.body });
     return res.status(400).json({
@@ -52,7 +75,6 @@ app.post('/webhook/powerdialer', async (req, res) => {
   }
 
   try {
-    // Handle the disposition and update Apollo
     const result = await handleDisposition({
       contactEmail: contact_email,
       disposition: disposition,
@@ -66,6 +88,16 @@ app.post('/webhook/powerdialer', async (req, res) => {
       contact_email,
       disposition,
       action: result.action
+    });
+
+    addEvent({
+      contactName: contact_name || 'Unknown',
+      contactEmail: contact_email,
+      disposition: disposition,
+      action: result.action,
+      sequenceName: result.sequenceName || null,
+      success: true,
+      error: null
     });
 
     res.json({
@@ -87,6 +119,16 @@ app.post('/webhook/powerdialer', async (req, res) => {
       duration: `${duration}ms`
     });
 
+    addEvent({
+      contactName: contact_name || 'Unknown',
+      contactEmail: contact_email,
+      disposition: disposition,
+      action: 'error',
+      sequenceName: null,
+      success: false,
+      error: error.message
+    });
+
     res.status(500).json({
       success: false,
       error: error.message,
@@ -99,6 +141,17 @@ app.post('/webhook/powerdialer', async (req, res) => {
 // Test endpoint
 app.post('/webhook/test', async (req, res) => {
   logger.info('🧪 Test webhook called', req.body);
+
+  addEvent({
+    contactName: req.body.contact_name || 'Test User',
+    contactEmail: req.body.contact_email || 'test@example.com',
+    disposition: req.body.disposition || 'Test',
+    action: 'test',
+    sequenceName: null,
+    success: true,
+    error: null
+  });
+
   res.json({
     success: true,
     message: 'Test webhook received successfully',
@@ -123,12 +176,11 @@ app.use((req, res) => {
   });
 });
 
-// Start server
 app.listen(PORT, () => {
   logger.info(`🚀 Webhook server running on port ${PORT}`);
   logger.info(`📡 Webhook URL: http://localhost:${PORT}/webhook/powerdialer`);
   logger.info(`🏥 Health check: http://localhost:${PORT}/health`);
-  logger.info(`🔑 Apollo Email Account ID: ${process.env.APOLLO_EMAIL_ACCOUNT_ID}`);
+  logger.info(`📊 Dashboard: http://localhost:${PORT}`);
 });
 
 module.exports = app;
