@@ -1,27 +1,80 @@
-const MAX_EVENTS = 100;
-const activityLog = [];
-const stats = { total: 0, added: 0, removed: 0, noAction: 0 };
+const MAX_PROCESSED = 100;
 
-function addEvent(event) {
-  activityLog.unshift({
-    id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-    ...event,
-    timestamp: new Date().toISOString()
-  });
-  if (activityLog.length > MAX_EVENTS) activityLog.pop();
+const pendingQueue = [];
+const processedLog = [];
+const stats = { total: 0, added: 0, removed: 0, noAction: 0, ignored: 0 };
 
+// ── PENDING QUEUE ──────────────────────────────────────────
+
+function addToPending(event) {
+  const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
+  const item = {
+    id,
+    contactName:  event.contactName  || 'Unknown',
+    contactEmail: event.contactEmail || '',
+    disposition:  event.disposition  || '',
+    notes:        event.notes        || null,
+    receivedAt:   new Date().toISOString(),
+    status: 'pending'
+  };
+  pendingQueue.unshift(item);
   stats.total++;
-  if (event.action === 'added_to_sequence') stats.added++;
-  else if (event.action === 'removed_from_sequences') stats.removed++;
-  else if (event.action === 'none') stats.noAction++;
+  return item;
 }
 
-function getEvents() {
-  return [...activityLog];
+function getPendingById(id) {
+  return pendingQueue.find(p => p.id === id) || null;
 }
+
+function removePending(id) {
+  const idx = pendingQueue.findIndex(p => p.id === id);
+  if (idx === -1) return null;
+  return pendingQueue.splice(idx, 1)[0];
+}
+
+function getPending() {
+  return [...pendingQueue];
+}
+
+// ── PROCESSED LOG ──────────────────────────────────────────
+
+function addToProcessed(item, action, sequenceId, sequenceName, status, error) {
+  const processed = {
+    ...item,
+    action,
+    sequenceId:   sequenceId   || null,
+    sequenceName: sequenceName || null,
+    processedAt:  new Date().toISOString(),
+    status,
+    error: error || null
+  };
+  processedLog.unshift(processed);
+  if (processedLog.length > MAX_PROCESSED) processedLog.pop();
+
+  if (action === 'added_to_sequence')      stats.added++;
+  else if (action === 'removed_from_sequences') stats.removed++;
+  else if (action === 'none')              stats.noAction++;
+  else if (status === 'ignored')           stats.ignored++;
+
+  return processed;
+}
+
+function getProcessed() {
+  return [...processedLog];
+}
+
+// ── STATS ──────────────────────────────────────────────────
 
 function getStats() {
-  return { ...stats };
+  return { ...stats, pending: pendingQueue.length };
 }
 
-module.exports = { addEvent, getEvents, getStats };
+module.exports = {
+  addToPending,
+  getPendingById,
+  removePending,
+  getPending,
+  addToProcessed,
+  getProcessed,
+  getStats
+};

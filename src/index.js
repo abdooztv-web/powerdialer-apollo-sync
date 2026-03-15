@@ -1,42 +1,36 @@
 require('dotenv').config();
-const path = require('path');
+const path    = require('path');
 const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
+const cors    = require('cors');
+const helmet  = require('helmet');
 const rateLimit = require('express-rate-limit');
-const { handleDisposition } = require('./handlers/disposition');
-const logger = require('./utils/logger');
-const { addEvent, getEvents, getStats } = require('./store');
+const logger  = require('./utils/logger');
+const store   = require('./store');
+const { findContactByEmail, addToSequence, removeFromSequences } = require('./handlers/apollo');
 
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware
+// ── MIDDLEWARE ─────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-      fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc:   ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc:    ["'self'", "https://fonts.gstatic.com"],
+      scriptSrc:  ["'self'", "'unsafe-inline'"],
       connectSrc: ["'self'"]
     }
   }
 }));
 app.use(cors());
 app.use(express.json());
-
-// Serve dashboard UI
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
-});
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
 app.use('/webhook', limiter);
 
-// Health check endpoint
+// ── HEALTH ─────────────────────────────────────────────────
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -45,141 +39,137 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Activity API for dashboard
+// ── SEQUENCES (available options for the UI) ───────────────
+app.get('/api/sequences', (req, res) => {
+  res.json({
+    sequences: [
+      { key: 'pastors',   id: process.env.PASTORS_SEQUENCE_ID,   name: 'Pastors High Positions' },
+      { key: 'directors', id: process.env.DIRECTORS_SEQUENCE_ID, name: 'Directors High Positions' },
+      { key: 'new',       id: process.env.NEW_SEQUENCE_ID,       name: 'New Contacts' }
+    ]
+  });
+});
+
+// ── DASHBOARD DATA ─────────────────────────────────────────
 app.get('/api/activity', (req, res) => {
   res.json({
     success: true,
-    stats: getStats(),
-    events: getEvents()
+    stats:   store.getStats(),
+    pending: store.getPending(),
+    events:  store.getProcessed()
   });
 });
 
-// Main webhook endpoint for PowerDialer
-app.post('/webhook/powerdialer', async (req, res) => {
-  const startTime = Date.now();
-  const { contact_email, disposition, contact_name, notes, timestamp } = req.body;
+// ── APPROVE A PENDING CONTACT ──────────────────────────────
+app.post('/api/approve/:id', async (req, res) => {
+  const { action, sequenceId, sequenceName } = req.body;
+  const item = store.getPendingById(req.params.id);
 
-  logger.info('📞 Received webhook', {
-    contact_email,
-    disposition,
-    contact_name,
-    timestamp
-  });
+  if (!item) {
+    return res.status(404).json({ success: false, error: 'Pending item not found' });
+  }
 
-  if (!contact_email || !disposition) {
-    logger.error('❌ Missing required fields', { body: req.body });
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fields: contact_email and disposition are required'
-    });
+  if (!action) {
+    return res.status(400).json({ success: false, error: 'action is required' });
   }
 
   try {
-    const result = await handleDisposition({
-      contactEmail: contact_email,
-      disposition: disposition,
-      contactName: contact_name,
-      notes: notes,
-      timestamp: timestamp
-    });
+    if (action === 'added_to_sequence') {
+      if (!sequenceId) return res.status(400).json({ success: false, error: 'sequenceId required for add action' });
+      const contact = await findContactByEmail(item.contactEmail);
+      if (!contact) throw new Error(`Contact ${item.contactEmail} not found in Apollo`);
+      await addToSequence(contact.id, sequenceId);
 
-    const duration = Date.now() - startTime;
-    logger.info(`✅ Successfully processed in ${duration}ms`, {
-      contact_email,
-      disposition,
-      action: result.action
-    });
+    } else if (action === 'removed_from_sequences') {
+      const contact = await findContactByEmail(item.contactEmail);
+      if (!contact) throw new Error(`Contact ${item.contactEmail} not found in Apollo`);
+      await removeFromSequences(contact.id, item.disposition);
+    }
+    // action === 'none' → no Apollo call needed
 
-    addEvent({
-      contactName: contact_name || 'Unknown',
-      contactEmail: contact_email,
-      disposition: disposition,
-      action: result.action,
-      sequenceName: result.sequenceName || null,
-      success: true,
-      error: null
-    });
+    store.removePending(req.params.id);
+    const processed = store.addToProcessed(item, action, sequenceId, sequenceName, 'approved', null);
 
-    res.json({
-      success: true,
-      message: result.message,
-      contact: contact_email,
-      disposition: disposition,
-      action: result.action,
-      processingTime: `${duration}ms`
-    });
+    logger.info('✅ Approved', { id: req.params.id, action, contactEmail: item.contactEmail });
+    res.json({ success: true, processed });
 
   } catch (error) {
-    const duration = Date.now() - startTime;
-    logger.error('❌ Error processing webhook', {
-      error: error.message,
-      contact_email,
-      disposition,
-      stack: error.stack,
-      duration: `${duration}ms`
-    });
+    logger.error('❌ Approve failed', { error: error.message, id: req.params.id });
 
-    addEvent({
-      contactName: contact_name || 'Unknown',
-      contactEmail: contact_email,
-      disposition: disposition,
-      action: 'error',
-      sequenceName: null,
-      success: false,
-      error: error.message
-    });
+    // Still move out of pending on Apollo error so it doesn't get stuck
+    store.removePending(req.params.id);
+    store.addToProcessed(item, action, sequenceId, sequenceName, 'error', error.message);
 
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      contact: contact_email,
-      suggestion: error.suggestion || 'Check server logs for details'
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Test endpoint
-app.post('/webhook/test', async (req, res) => {
-  logger.info('🧪 Test webhook called', req.body);
+// ── IGNORE A PENDING CONTACT ───────────────────────────────
+app.post('/api/ignore/:id', (req, res) => {
+  const item = store.getPendingById(req.params.id);
+  if (!item) return res.status(404).json({ success: false, error: 'Not found' });
 
-  addEvent({
-    contactName: req.body.contact_name || 'Test User',
-    contactEmail: req.body.contact_email || 'test@example.com',
-    disposition: req.body.disposition || 'Test',
-    action: 'test',
-    sequenceName: null,
-    success: true,
-    error: null
+  store.removePending(req.params.id);
+  store.addToProcessed(item, 'none', null, null, 'ignored', null);
+
+  logger.info('🚫 Ignored', { id: req.params.id, contactEmail: item.contactEmail });
+  res.json({ success: true });
+});
+
+// ── WEBHOOK: PowerDialer → queue for approval ──────────────
+app.post('/webhook/powerdialer', (req, res) => {
+  const { contact_email, disposition, contact_name, notes, timestamp } = req.body;
+
+  logger.info('📞 Incoming webhook — queued for approval', { contact_email, disposition });
+
+  if (!contact_email || !disposition) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields: contact_email and disposition'
+    });
+  }
+
+  const item = store.addToPending({
+    contactName:  contact_name,
+    contactEmail: contact_email,
+    disposition:  disposition,
+    notes:        notes
   });
 
   res.json({
     success: true,
-    message: 'Test webhook received successfully',
-    receivedData: req.body
+    message: 'Queued for admin approval',
+    id: item.id
   });
 });
 
-// Error handling middleware
+// ── TEST ENDPOINT ──────────────────────────────────────────
+app.post('/webhook/test', (req, res) => {
+  logger.info('🧪 Test webhook', req.body);
+
+  const item = store.addToPending({
+    contactName:  req.body.contact_name  || 'Test User',
+    contactEmail: req.body.contact_email || 'test@example.com',
+    disposition:  req.body.disposition   || 'Test',
+    notes:        req.body.notes         || null
+  });
+
+  res.json({ success: true, message: 'Test queued for approval', id: item.id });
+});
+
+// ── ERROR HANDLERS ─────────────────────────────────────────
 app.use((err, req, res, next) => {
-  logger.error('Unhandled error', { error: err.message, stack: err.stack });
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error'
-  });
+  logger.error('Unhandled error', { error: err.message });
+  res.status(500).json({ success: false, error: 'Internal server error' });
 });
 
-// 404 handler
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    error: 'Endpoint not found'
-  });
+  res.status(404).json({ success: false, error: 'Endpoint not found' });
 });
 
+// ── START ──────────────────────────────────────────────────
 app.listen(PORT, () => {
-  logger.info(`🚀 Webhook server running on port ${PORT}`);
-  logger.info(`📡 Webhook URL: http://localhost:${PORT}/webhook/powerdialer`);
-  logger.info(`🏥 Health check: http://localhost:${PORT}/health`);
+  logger.info(`🚀 Server running on port ${PORT}`);
   logger.info(`📊 Dashboard: http://localhost:${PORT}`);
 });
 
