@@ -118,14 +118,24 @@ app.post('/api/ignore/:id', (req, res) => {
 
 // ── WEBHOOK: PowerDialer → queue for approval ──────────────
 app.post('/webhook/powerdialer', (req, res) => {
-  const { contact_email, disposition, contact_name, notes, timestamp } = req.body;
+  const body = req.body;
 
-  logger.info('📞 Incoming webhook — queued for approval', { contact_email, disposition });
+  // Log full body so we can debug field names from PowerDialer
+  logger.info('📞 Incoming webhook — raw body', body);
+
+  // Accept multiple possible field name formats from PowerDialer
+  const contact_email = body.contact_email || body.email || body.Email || body.contact?.email;
+  const disposition   = body.disposition   || body.Disposition || body.outcome || body.call_disposition || body.result || body.call_result;
+  const contact_name  = body.contact_name  || body.name || body.Name || body.contact_name || body.contact?.name || body.full_name;
+  const notes         = body.notes         || body.note || body.comments || body.comment;
 
   if (!contact_email || !disposition) {
+    logger.error('❌ Missing fields', { received_fields: Object.keys(body), body });
     return res.status(400).json({
       success: false,
-      error: 'Missing required fields: contact_email and disposition'
+      error: 'Missing required fields: contact_email and disposition',
+      received_fields: Object.keys(body),
+      received_body: body
     });
   }
 
@@ -136,10 +146,22 @@ app.post('/webhook/powerdialer', (req, res) => {
     notes:        notes
   });
 
+  logger.info('✅ Queued for approval', { contactEmail: contact_email, disposition, id: item.id });
+
   res.json({
     success: true,
     message: 'Queued for admin approval',
     id: item.id
+  });
+});
+
+// ── DEBUG: shows exactly what was received ─────────────────
+app.post('/webhook/debug', (req, res) => {
+  logger.info('🔍 Debug webhook', req.body);
+  res.json({
+    success: true,
+    received_fields: Object.keys(req.body),
+    received_body: req.body
   });
 });
 
