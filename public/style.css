@@ -56,27 +56,28 @@ body {
 
 .sidebar-logo {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.logo-icon {
-  width: 40px;
-  height: 40px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+.logo-box {
+  background: #ffffff;
   border-radius: 10px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 13px;
-  color: white;
-  flex-shrink: 0;
-  box-shadow: 0 4px 14px rgba(99,102,241,0.4);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
 }
 
-.logo-title { display: block; font-weight: 700; font-size: 14px; }
-.logo-sub   { display: block; font-size: 11px; color: var(--text-muted); }
+.logo-img {
+  width: 100%;
+  max-width: 160px;
+  height: auto;
+  display: block;
+}
+
+.logo-sub { font-size: 11px; color: var(--text-muted); padding: 0 2px; }
 
 .sidebar-bottom { display: flex; flex-direction: column; gap: 8px; }
 
