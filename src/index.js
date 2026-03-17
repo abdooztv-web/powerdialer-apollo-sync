@@ -27,7 +27,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 });
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: { xForwardedForHeader: false } });
 app.use('/webhook', limiter);
 
 // ── HEALTH ─────────────────────────────────────────────────
@@ -123,11 +123,15 @@ app.post('/webhook/powerdialer', (req, res) => {
   // Log full body so we can debug field names from PowerDialer
   logger.info('📞 Incoming webhook — raw body', body);
 
-  // Accept multiple possible field name formats from PowerDialer
-  const contact_email = body.contact_email || body.email || body.Email || body.contact?.email;
-  const disposition   = body.disposition   || body.Disposition || body.outcome || body.call_disposition || body.result || body.call_result;
-  const contact_name  = body.contact_name  || body.name || body.Name || body.contact_name || body.contact?.name || body.full_name;
-  const notes         = body.notes         || body.note || body.comments || body.comment;
+  const d = body.data || body;
+  const contact_email   = d.contact?.metadata?.email || d.contact_email || d.email;
+  const contact_name    = d.contact?.name || d.contact_name || d.name || 'Unknown';
+  const disposition     = d.disposition?.type || d.dispositionType || d.disposition || d.event;
+  const notes           = d.disposition?.notes || d.notes || null;
+  const contact_phone   = d.contact?.phoneNumber || d.phoneNumber || null;
+  const contact_id_pd   = d.contact?.id || d.contactId || null;
+  const call_sid        = d.callSid || d.callHistory?.callSid || null;
+  const call_transcript = d.callHistory?.transcript || null;
 
   if (!contact_email || !disposition) {
     logger.error('❌ Missing fields', { received_fields: Object.keys(body), body });
@@ -140,10 +144,14 @@ app.post('/webhook/powerdialer', (req, res) => {
   }
 
   const item = store.addToPending({
-    contactName:  contact_name,
-    contactEmail: contact_email,
-    disposition:  disposition,
-    notes:        notes
+    contactName:    contact_name,
+    contactEmail:   contact_email,
+    disposition:    disposition,
+    notes:          notes,
+    contactPhone:   contact_phone,
+    contactIdPd:    contact_id_pd,
+    callSid:        call_sid,
+    callTranscript: call_transcript
   });
 
   logger.info('✅ Queued for approval', { contactEmail: contact_email, disposition, id: item.id });

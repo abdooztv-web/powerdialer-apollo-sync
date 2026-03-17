@@ -10,11 +10,15 @@ function addToPending(event) {
   const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
   const item = {
     id,
-    contactName:  event.contactName  || 'Unknown',
-    contactEmail: event.contactEmail || '',
-    disposition:  event.disposition  || '',
-    notes:        event.notes        || null,
-    receivedAt:   new Date().toISOString(),
+    contactName:    event.contactName    || 'Unknown',
+    contactEmail:   event.contactEmail   || '',
+    disposition:    event.disposition    || '',
+    notes:          event.notes          || null,
+    contactPhone:   event.contactPhone   || null,
+    contactIdPd:    event.contactIdPd    || null,
+    callSid:        event.callSid        || null,
+    callTranscript: event.callTranscript || null,
+    receivedAt:     new Date().toISOString(),
     status: 'pending'
   };
   pendingQueue.unshift(item);
