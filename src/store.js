@@ -4,20 +4,21 @@ const pendingQueue = [];
 const processedLog = [];
 const stats = { total: 0, added: 0, removed: 0, noAction: 0, ignored: 0 };
 
-// ── PENDING QUEUE ──────────────────────────────────────────
-
 function addToPending(event) {
   const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7);
   const item = {
     id,
     contactName:    event.contactName    || 'Unknown',
     contactEmail:   event.contactEmail   || '',
+    contactPhone:   event.contactPhone   || null,
+    contactCompany: event.contactCompany || null,
+    contactTitle:   event.contactTitle   || null,
+    contactIdPd:    event.contactIdPd    || null,
     disposition:    event.disposition    || '',
     notes:          event.notes          || null,
-    contactPhone:   event.contactPhone   || null,
-    contactIdPd:    event.contactIdPd    || null,
-    callSid:        event.callSid        || null,
+    callTime:       event.callTime       || null,
     callTranscript: event.callTranscript || null,
+    callSid:        event.callSid        || null,
     receivedAt:     new Date().toISOString(),
     status: 'pending'
   };
@@ -40,8 +41,6 @@ function getPending() {
   return [...pendingQueue];
 }
 
-// ── PROCESSED LOG ──────────────────────────────────────────
-
 function addToProcessed(item, action, sequenceId, sequenceName, status, error) {
   const processed = {
     ...item,
@@ -55,10 +54,10 @@ function addToProcessed(item, action, sequenceId, sequenceName, status, error) {
   processedLog.unshift(processed);
   if (processedLog.length > MAX_PROCESSED) processedLog.pop();
 
-  if (action === 'added_to_sequence')      stats.added++;
+  if (action === 'added_to_sequence')        stats.added++;
   else if (action === 'removed_from_sequences') stats.removed++;
-  else if (action === 'none')              stats.noAction++;
-  else if (status === 'ignored')           stats.ignored++;
+  else if (action === 'none')                stats.noAction++;
+  else if (status === 'ignored')             stats.ignored++;
 
   return processed;
 }
@@ -66,8 +65,6 @@ function addToProcessed(item, action, sequenceId, sequenceName, status, error) {
 function getProcessed() {
   return [...processedLog];
 }
-
-// ── STATS ──────────────────────────────────────────────────
 
 function getStats() {
   return { ...stats, pending: pendingQueue.length };

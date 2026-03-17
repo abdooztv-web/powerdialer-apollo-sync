@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PD × Apollo — Admin Dashboard</title>
+  <title>PD × Apollo — Admin</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -21,189 +21,114 @@
           <span class="logo-sub">× Apollo Sync</span>
         </div>
       </div>
-
-      <nav class="sidebar-nav">
-        <a href="#overview" class="nav-item active" data-section="overview">
-          <span class="nav-icon">▣</span> Dashboard
-        </a>
-        <a href="#pending" class="nav-item" data-section="pending">
-          <span class="nav-icon">⏳</span> Pending Approvals
-          <span class="nav-badge" id="pendingBadge" style="display:none">0</span>
-        </a>
-        <a href="#activity" class="nav-item" data-section="activity">
-          <span class="nav-icon">📋</span> Activity Log
-        </a>
-        <a href="#test" class="nav-item" data-section="test">
-          <span class="nav-icon">🧪</span> Test Webhook
-        </a>
-      </nav>
-
-      <div class="sidebar-status">
-        <div class="status-dot" id="statusDot"></div>
-        <span class="status-label" id="statusLabel">Checking...</span>
+      <div class="sidebar-bottom">
+        <div class="sidebar-status">
+          <div class="status-dot" id="statusDot"></div>
+          <span class="status-label" id="statusLabel">Checking...</span>
+        </div>
+        <div class="sidebar-meta" id="lastUpdated">—</div>
       </div>
     </aside>
 
     <!-- MAIN -->
     <main class="main">
 
-      <!-- HEADER -->
-      <header class="page-header" id="overview">
-        <div>
-          <h1>Admin Dashboard</h1>
-          <p class="header-sub">Manual approval control for PowerDialer → Apollo.io</p>
-        </div>
-        <div class="header-actions">
-          <span class="last-updated" id="lastUpdated">—</span>
-          <button class="btn-outline" id="btnRefresh">↻ Refresh</button>
-        </div>
-      </header>
+      <!-- TOP NAV TABS -->
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="inbox">
+          Inbox
+          <span class="tab-badge" id="inboxBadge" style="display:none">0</span>
+        </button>
+        <button class="tab-btn" data-tab="analytics">Analytics</button>
+        <button class="tab-btn" data-tab="activity">Activity Log</button>
+        <div class="tab-spacer"></div>
+        <button class="btn-outline" id="btnRefresh">↻ Refresh</button>
+      </nav>
 
-      <!-- STATS -->
-      <section class="stats-grid">
-        <div class="stat-card stat-card--pending">
-          <div class="stat-icon stat-icon--pending">⏳</div>
-          <div class="stat-body">
-            <div class="stat-value" id="statPending">0</div>
-            <div class="stat-label">Awaiting Approval</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon stat-icon--total">⚡</div>
-          <div class="stat-body">
-            <div class="stat-value" id="statTotal">0</div>
-            <div class="stat-label">Total Received</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon stat-icon--added">+</div>
-          <div class="stat-body">
-            <div class="stat-value" id="statAdded">0</div>
-            <div class="stat-label">Added to Sequence</div>
-          </div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-icon stat-icon--removed">−</div>
-          <div class="stat-body">
-            <div class="stat-value" id="statRemoved">0</div>
-            <div class="stat-label">Removed</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- PENDING APPROVALS -->
-      <section class="card card--highlight" id="pending">
-        <div class="card-header">
+      <!-- ── PAGE: INBOX ───────────────────────────────── -->
+      <div class="page active" id="page-inbox">
+        <div class="page-header">
           <div>
-            <h2>Pending Approvals <span class="count-chip" id="pendingCount">0</span></h2>
-            <p class="card-sub">Each incoming call waits here for your decision before anything happens in Apollo</p>
+            <h1>Webhook Inbox</h1>
+            <p class="page-sub">Incoming calls wait here for your decision — nothing runs in Apollo until you act</p>
+          </div>
+          <div class="stats-row">
+            <div class="mini-stat">
+              <span class="mini-val" id="statPending">0</span>
+              <span class="mini-label">Pending</span>
+            </div>
+            <div class="mini-stat">
+              <span class="mini-val" id="statTotal">0</span>
+              <span class="mini-label">Total</span>
+            </div>
+            <div class="mini-stat mini-stat--green">
+              <span class="mini-val" id="statAdded">0</span>
+              <span class="mini-label">Added</span>
+            </div>
+            <div class="mini-stat mini-stat--red">
+              <span class="mini-val" id="statRemoved">0</span>
+              <span class="mini-label">Removed</span>
+            </div>
           </div>
         </div>
-        <div id="pendingList">
+
+        <div id="inboxList">
           <div class="empty-state">
-            <div class="empty-icon">✅</div>
-            <div class="empty-title">All clear</div>
-            <div class="empty-sub">No calls waiting for approval</div>
+            <div class="empty-icon">📭</div>
+            <div class="empty-title">No calls waiting</div>
+            <div class="empty-sub">New calls from PowerDialer will appear here automatically</div>
           </div>
         </div>
-      </section>
+      </div>
 
-      <!-- ACTIVITY LOG -->
-      <section class="card" id="activity">
-        <div class="card-header">
+      <!-- ── PAGE: ANALYTICS ──────────────────────────── -->
+      <div class="page" id="page-analytics">
+        <div class="page-header">
           <div>
-            <h2>Activity Log</h2>
-            <span class="card-sub">Processed decisions · last 100 events · auto-refreshes every 10s</span>
+            <h1>Sequence Analytics</h1>
+            <p class="page-sub">Live stats pulled from Apollo.io — read only</p>
+          </div>
+          <button class="btn-outline" id="btnRefreshAnalytics">↻ Refresh</button>
+        </div>
+        <div class="analytics-grid" id="analyticsGrid">
+          <div class="empty-state">
+            <div class="empty-icon">📊</div>
+            <div class="empty-title">Loading...</div>
           </div>
         </div>
-        <div class="table-wrapper">
-          <table class="activity-table">
-            <thead>
-              <tr>
-                <th>Contact</th>
-                <th>Disposition</th>
-                <th>Your Decision</th>
-                <th>Sequence</th>
-                <th>Processed</th>
-              </tr>
-            </thead>
-            <tbody id="activityBody">
-              <tr class="empty-row">
-                <td colspan="5">No decisions made yet</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </div>
 
-      <!-- TEST WEBHOOK -->
-      <section class="card" id="test">
-        <div class="card-header">
-          <h2>Test Webhook</h2>
-          <span class="card-sub">Simulate an incoming call — it will appear in Pending Approvals above</span>
+      <!-- ── PAGE: ACTIVITY LOG ────────────────────────── -->
+      <div class="page" id="page-activity">
+        <div class="page-header">
+          <div>
+            <h1>Activity Log</h1>
+            <p class="page-sub">All processed decisions · last 100 events</p>
+          </div>
         </div>
-        <form class="test-form" id="testForm">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="testEmail">Contact Email</label>
-              <input type="email" id="testEmail" placeholder="contact@church.org" required>
-            </div>
-            <div class="form-group">
-              <label for="testName">Contact Name</label>
-              <input type="text" id="testName" placeholder="Pastor John Smith">
-            </div>
+        <div class="card">
+          <div class="table-wrapper">
+            <table class="activity-table">
+              <thead>
+                <tr>
+                  <th>Contact</th>
+                  <th>Disposition</th>
+                  <th>Decision</th>
+                  <th>Sequence</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody id="activityBody">
+                <tr class="empty-row">
+                  <td colspan="5">No decisions yet</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="testDisposition">Disposition</label>
-              <select id="testDisposition">
-                <optgroup label="→ Add to Sequence">
-                  <option value="Interested">Interested</option>
-                  <option value="Very Interested">Very Interested</option>
-                  <option value="Hot Lead">Hot Lead</option>
-                  <option value="Callback Requested">Callback Requested</option>
-                  <option value="Callback">Callback</option>
-                </optgroup>
-                <optgroup label="→ Remove from Sequences">
-                  <option value="Not Interested">Not Interested</option>
-                  <option value="Wrong Number">Wrong Number</option>
-                  <option value="Invalid Number">Invalid Number</option>
-                  <option value="Meeting Scheduled">Meeting Scheduled</option>
-                  <option value="Demo Scheduled">Demo Scheduled</option>
-                </optgroup>
-                <optgroup label="→ No Action">
-                  <option value="Left Voicemail">Left Voicemail</option>
-                  <option value="No Answer">No Answer</option>
-                  <option value="Busy">Busy</option>
-                </optgroup>
-              </select>
-            </div>
-            <div class="form-group form-group--btn">
-              <label>&nbsp;</label>
-              <button type="submit" class="btn-primary" id="btnSubmit">Send Test Call</button>
-            </div>
-          </div>
-          <div class="form-result" id="formResult" style="display:none"></div>
-        </form>
-      </section>
+        </div>
+      </div>
 
     </main>
-  </div>
-
-  <!-- APPROVE MODAL -->
-  <div class="modal-overlay" id="modalOverlay" style="display:none">
-    <div class="modal">
-      <div class="modal-header">
-        <h3>Choose Action</h3>
-        <button class="modal-close" id="modalClose">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-contact" id="modalContact"></div>
-        <div class="modal-disposition" id="modalDisposition"></div>
-        <p class="modal-label">What do you want to do with this contact?</p>
-        <div class="modal-actions" id="modalActions"></div>
-      </div>
-    </div>
   </div>
 
   <script src="/app.js"></script>
