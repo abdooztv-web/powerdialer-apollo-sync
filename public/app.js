@@ -1,7 +1,8 @@
 // ── CONFIG ──────────────────────────────────────────────────
 const POLL_MS = 10000;
-let isFetching = false;
-let sequences  = [];
+let isFetching    = false;
+let pollingPaused = false;   // paused while a card action is in flight
+let sequences     = [];
 
 // ── HELPERS ────────────────────────────────────────────────
 function esc(str) {
@@ -94,7 +95,7 @@ async function loadSequences() {
 
 // ── FETCH INBOX + ACTIVITY ───────────────────────────────────
 async function fetchActivity() {
-  if (isFetching) return;
+  if (isFetching || pollingPaused) return;
   isFetching = true;
   try {
     const res = await fetch('/api/activity');
@@ -232,6 +233,7 @@ document.getElementById('inboxList').addEventListener('click', async function(e)
     const seqId   = btn.dataset.seqId;
     const seqName = btn.dataset.seqName;
     document.querySelectorAll('.seq-dropdown.open').forEach(d => d.classList.remove('open'));
+    pollingPaused = true;
     setCardState(cardId, 'loading', 'Adding to ' + seqName + '…');
     try {
       const res  = await fetch('/api/approve/' + cardId, {
@@ -242,18 +244,21 @@ document.getElementById('inboxList').addEventListener('click', async function(e)
       const data = await res.json();
       if (data.success) {
         setCardState(cardId, 'success', '✓ Added to ' + seqName);
-        setTimeout(fetchActivity, 1000);
+        setTimeout(() => { pollingPaused = false; fetchActivity(); }, 2500);
       } else {
         setCardState(cardId, 'error', data.error || 'Failed — try again');
+        setTimeout(() => { pollingPaused = false; }, 5000);
       }
     } catch (err) {
       setCardState(cardId, 'error', 'Network error: ' + err.message);
+      setTimeout(() => { pollingPaused = false; }, 5000);
     }
     return;
   }
 
   // ── Not Interested → remove from all sequences
   if (action === 'not-interested') {
+    pollingPaused = true;
     setCardState(cardId, 'loading', 'Removing from sequences…');
     try {
       const res  = await fetch('/api/approve/' + cardId, {
@@ -264,23 +269,27 @@ document.getElementById('inboxList').addEventListener('click', async function(e)
       const data = await res.json();
       if (data.success) {
         setCardState(cardId, 'success', '✓ Removed from all sequences');
-        setTimeout(fetchActivity, 1000);
+        setTimeout(() => { pollingPaused = false; fetchActivity(); }, 2500);
       } else {
         setCardState(cardId, 'error', data.error || 'Failed');
+        setTimeout(() => { pollingPaused = false; }, 5000);
       }
     } catch (err) {
       setCardState(cardId, 'error', 'Network error: ' + err.message);
+      setTimeout(() => { pollingPaused = false; }, 5000);
     }
     return;
   }
 
   // ── Skip
   if (action === 'skip') {
+    pollingPaused = true;
     setCardState(cardId, 'loading', 'Skipping…');
     try {
       await fetch('/api/ignore/' + cardId, { method: 'POST' });
-      setTimeout(fetchActivity, 600);
+      setTimeout(() => { pollingPaused = false; fetchActivity(); }, 800);
     } catch {
+      pollingPaused = false;
       fetchActivity();
     }
     return;
