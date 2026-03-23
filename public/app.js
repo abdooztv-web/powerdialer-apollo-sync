@@ -536,8 +536,8 @@ async function pollScrapeStatus() {
     if (data.status === 'RUNNING' || data.status === 'READY') {
       showScrapeProgress(`Scraping… ${data.itemCount ? data.itemCount + ' places found so far' : 'in progress'}`);
     } else if (data.status === 'PROCESSING') {
-      showScrapeProgress('Scoring leads with Claude AI…');
-    } else if (data.status === 'DONE') {
+      showScrapeProgress('Scoring leads with Claude AI… (this may take 30s)');
+    } else if (data.status === 'DONE' || (data.success && data.count != null)) {
       clearInterval(scrapePollTimer);
       scrapePollTimer = null;
       scrapeRunId = null;

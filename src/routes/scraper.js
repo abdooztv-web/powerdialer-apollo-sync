@@ -9,6 +9,16 @@ const logger = require('../utils/logger');
 // Active scrape jobs tracked in memory (runId -> status)
 const activeJobs = new Map();
 
+function fallbackScore(lead) {
+  let score = 0;
+  const cat = (lead.category || '').toLowerCase();
+  if (cat.includes('orthodox') || cat.includes('eastern') || cat.includes('coptic') || cat.includes('armenian')) score += 3;
+  if (!lead.hasWebsite) score += 3;
+  if ((lead.reviewCount || 0) < 30) score += 2;
+  if (lead.phone) score += 1;
+  return Math.max(1, Math.min(10, score));
+}
+
 // POST /api/scraper/run
 router.post('/run', async (req, res) => {
   try {
@@ -28,7 +38,6 @@ router.post('/run', async (req, res) => {
     const detail = err.response?.data || err.message;
     logger.error('Failed to start scrape', { error: err.message, apify: detail });
     res.status(500).json({ success: false, error: err.message, detail });
-    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -40,31 +49,36 @@ router.get('/status/:runId', async (req, res) => {
     const apifyStatus = await getJobStatus(runId);
 
     if (apifyStatus.status === 'SUCCEEDED' && !job.scored) {
-      // Mark as processing so concurrent polls don't double-score
+      // Mark scored immediately to prevent double-processing on concurrent polls
       activeJobs.set(runId, { ...job, status: 'PROCESSING', scored: true });
 
-      // Async: fetch, score, save
-      fetchResults(apifyStatus.datasetId)
-        .then(raw => {
-          const withIds = raw.map(r => ({ ...r, id: generateId(), status: 'new', scrapedAt: new Date().toISOString() }));
+      // Synchronous: fetch + score + save within this request (required for Vercel)
+      try {
+        const raw = await fetchResults(apifyStatus.datasetId);
+        const withIds = raw.map(r => ({ ...r, id: generateId(), status: 'new', scrapedAt: new Date().toISOString() }));
 
-          const useScoring = process.env.ANTHROPIC_API_KEY;
-          const scoringPromise = useScoring ? scoreLeads(withIds) : Promise.resolve(withIds.map(l => ({
-            ...l, score: null, scoreReason: 'Scoring skipped (no API key)', suggestedSequence: null
-          })));
+        let scored;
+        if (process.env.ANTHROPIC_API_KEY) {
+          try {
+            scored = await scoreLeads(withIds);
+          } catch (scoreErr) {
+            logger.error('Claude scoring failed', { error: scoreErr.message, response: scoreErr.response?.data });
+            scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (Claude error: ' + scoreErr.message + ')', suggestedSequence: 'skip' }));
+          }
+        } else {
+          logger.warn('ANTHROPIC_API_KEY not set — using fallback scoring');
+          scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
+        }
 
-          return scoringPromise.then(scored => {
-            const added = saveLeads(scored);
-            activeJobs.set(runId, { ...activeJobs.get(runId), status: 'DONE', count: added });
-            logger.info('Scrape complete', { runId, total: raw.length, added });
-          });
-        })
-        .catch(err => {
-          activeJobs.set(runId, { ...activeJobs.get(runId), status: 'ERROR', error: err.message });
-          logger.error('Post-scrape processing failed', { runId, error: err.message });
-        });
-
-      return res.json({ success: true, status: 'PROCESSING', message: 'Fetching and scoring leads…' });
+        const added = saveLeads(scored);
+        activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added });
+        logger.info('Scrape complete', { runId, total: raw.length, added });
+        return res.json({ success: true, status: 'DONE', count: added });
+      } catch (err) {
+        activeJobs.set(runId, { ...job, status: 'ERROR', scored: true, error: err.message });
+        logger.error('Post-scrape processing failed', { runId, error: err.message });
+        return res.status(500).json({ success: false, error: err.message });
+      }
     }
 
     const localStatus = job.status || apifyStatus.status;
