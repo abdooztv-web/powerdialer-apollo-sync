@@ -25,7 +25,9 @@ router.post('/run', async (req, res) => {
     logger.info('Scrape job started', { runId, searchType, location, maxResults });
     res.json({ success: true, runId, datasetId });
   } catch (err) {
-    logger.error('Failed to start scrape', { error: err.message });
+    const detail = err.response?.data || err.message;
+    logger.error('Failed to start scrape', { error: err.message, apify: detail });
+    res.status(500).json({ success: false, error: err.message, detail });
     res.status(500).json({ success: false, error: err.message });
   }
 });

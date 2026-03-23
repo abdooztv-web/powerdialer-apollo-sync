@@ -30,18 +30,14 @@ async function runGoogleMapsScrape({ searchType = 'orthodox', location = 'United
     searchStringsArray: searchTerms,
     maxCrawledPlacesPerSearch: Math.ceil(maxResults / searchTerms.length),
     language: 'en',
-    exportPlaceUrls: false,
-    includeWebResults: false,
-    scrapeDirectories: false,
-    deeperCityScrape: false,
     maxImages: 0,
     maxReviews: 0,
   };
 
   const res = await axios.post(
-    `${APIFY_BASE}/acts/${ACTOR_ID}/runs`,
-    { ...input },
-    { headers: { ...headers(), 'Content-Type': 'application/json' } }
+    `${APIFY_BASE}/acts/${ACTOR_ID}/runs?token=${process.env.APIFY_API_TOKEN}`,
+    input,
+    { headers: { 'Content-Type': 'application/json' } }
   );
 
   const run = res.data.data;
