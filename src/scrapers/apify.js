@@ -1,8 +1,8 @@
 const axios = require('axios');
 
 const APIFY_BASE = 'https://api.apify.com/v2';
-// Google Maps Scraper actor maintained by Apify
-const ACTOR_ID = 'apify~google-maps-scraper';
+// Google Maps Scraper - free community actor
+const ACTOR_ID = 'compass~crawler-google-places';
 
 function headers() {
   return { Authorization: `Bearer ${process.env.APIFY_API_TOKEN}` };
