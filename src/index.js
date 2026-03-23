@@ -8,6 +8,7 @@ const axios   = require('axios');
 const logger  = require('./utils/logger');
 const store   = require('./store');
 const { findContactByEmail, addToSequence, removeFromSequences } = require('./handlers/apollo');
+const scraperRoutes = require('./routes/scraper');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +40,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, validate: { xForwardedForHeader: false } });
 app.use('/webhook', limiter);
+
+// ── SCRAPER ROUTES ──────────────────────────────────────────
+app.use('/api/scraper', scraperRoutes);
 
 // ── HEALTH ─────────────────────────────────────────────────
 app.get('/health', (req, res) => {

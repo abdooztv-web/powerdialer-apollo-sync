@@ -40,6 +40,10 @@
         </button>
         <button class="tab-btn" data-tab="analytics">Analytics</button>
         <button class="tab-btn" data-tab="activity">Activity Log</button>
+        <button class="tab-btn" data-tab="scraper">
+          Scraper
+          <span class="tab-badge" id="scraperBadge" style="display:none">0</span>
+        </button>
         <div class="tab-spacer"></div>
         <button class="btn-outline" id="btnRefresh">↻ Refresh</button>
       </nav>
@@ -125,6 +129,149 @@
             </table>
           </div>
         </div>
+      </div>
+
+      <!-- ── PAGE: SCRAPER ─────────────────────────────── -->
+      <div class="page" id="page-scraper">
+
+        <!-- Config Panel -->
+        <div class="page-header">
+          <div>
+            <h1>Church Lead Scraper</h1>
+            <p class="page-sub">Scrape Google Maps → Score with Claude AI → Push to Apollo sequences</p>
+          </div>
+        </div>
+
+        <div class="scraper-config card">
+          <h2 class="section-title">Scrape Configuration</h2>
+          <div class="scraper-form">
+            <div class="form-group">
+              <label class="form-label">Search Type</label>
+              <select id="scraperSearchType" class="form-select">
+                <option value="orthodox">Orthodox Churches</option>
+                <option value="small">Small Churches (broad)</option>
+                <option value="custom">Custom Keyword</option>
+              </select>
+            </div>
+            <div class="form-group" id="customKeywordGroup" style="display:none">
+              <label class="form-label">Custom Keyword</label>
+              <input type="text" id="scraperCustomKeyword" class="form-input" placeholder="e.g. Coptic Church, Armenian Church">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Location</label>
+              <input type="text" id="scraperLocation" class="form-input" value="United States" placeholder="e.g. Ohio, Cleveland OH">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Max Results</label>
+              <input type="number" id="scraperMaxResults" class="form-input" value="200" min="10" max="2000">
+            </div>
+            <div class="form-group form-group--checks">
+              <label class="form-check">
+                <input type="checkbox" id="scraperNoWebsite" checked>
+                <span>Prioritize no-website churches</span>
+              </label>
+              <label class="form-check">
+                <input type="checkbox" id="scraperUseScoring" checked>
+                <span>Score with Claude AI</span>
+              </label>
+            </div>
+            <div class="form-group form-group--action">
+              <button class="btn-run" id="btnRunScrape">▶ Run Scrape</button>
+            </div>
+          </div>
+          <div id="scrapeProgress" class="scrape-progress" style="display:none">
+            <div class="progress-banner">
+              <span class="progress-spinner"></span>
+              <span id="scrapeProgressMsg">Starting scrape…</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="stats-row scraper-stats">
+          <div class="mini-stat">
+            <span class="mini-val" id="scraperStatTotal">0</span>
+            <span class="mini-label">Total Leads</span>
+          </div>
+          <div class="mini-stat mini-stat--blue">
+            <span class="mini-val" id="scraperStatScored">0</span>
+            <span class="mini-label">Scored</span>
+          </div>
+          <div class="mini-stat mini-stat--green">
+            <span class="mini-val" id="scraperStatPushed">0</span>
+            <span class="mini-label">Pushed</span>
+          </div>
+          <div class="mini-stat mini-stat--red">
+            <span class="mini-val" id="scraperStatSkipped">0</span>
+            <span class="mini-label">Skipped</span>
+          </div>
+        </div>
+
+        <!-- Filter Bar -->
+        <div class="filter-bar card">
+          <div class="filter-group">
+            <label class="filter-label">Min Score</label>
+            <input type="range" id="filterMinScore" min="1" max="10" value="1" class="filter-range">
+            <span class="filter-val" id="filterMinScoreVal">1</span>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Max Score</label>
+            <input type="range" id="filterMaxScore" min="1" max="10" value="10" class="filter-range">
+            <span class="filter-val" id="filterMaxScoreVal">10</span>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Location</label>
+            <input type="text" id="filterLocation" class="filter-input" placeholder="State or city…">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Website</label>
+            <select id="filterHasWebsite" class="filter-select">
+              <option value="">All</option>
+              <option value="false">No Website</option>
+              <option value="true">Has Website</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Status</label>
+            <select id="filterStatus" class="filter-select">
+              <option value="">All</option>
+              <option value="new">New</option>
+              <option value="pushed">Pushed</option>
+              <option value="skipped">Skipped</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">Sort</label>
+            <select id="filterSort" class="filter-select">
+              <option value="score">Score ↓</option>
+              <option value="date">Date ↓</option>
+              <option value="name">Name A-Z</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Bulk Actions Bar -->
+        <div class="bulk-actions" id="bulkActions" style="display:none">
+          <span id="bulkCount">0 selected</span>
+          <div class="bulk-btns">
+            <div class="dropdown" id="bulkPushDropdown">
+              <button class="btn-seq" id="btnBulkPush">→ Push to Sequence ▾</button>
+              <div class="dropdown-menu" id="bulkSeqMenu"></div>
+            </div>
+            <button class="btn-skip-bulk" id="btnBulkSkip">Skip Selected</button>
+            <button class="btn-outline" id="btnExportCSV">⬇ Export CSV</button>
+          </div>
+        </div>
+
+        <!-- Leads List -->
+        <div id="leadsList">
+          <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">No leads yet</div>
+            <div class="empty-sub">Run a scrape above to start building your lead database</div>
+          </div>
+        </div>
+
       </div>
 
     </main>

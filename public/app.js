@@ -428,3 +428,397 @@ loadSequences().then(() => {
   setInterval(fetchActivity, POLL_MS);
   setInterval(checkHealth, 30000);
 });
+
+// ════════════════════════════════════════════════════════════
+//  SCRAPER
+// ════════════════════════════════════════════════════════════
+
+let scrapeRunId = null;
+let scrapePollTimer = null;
+let selectedLeadIds = new Set();
+let currentLeadFilters = {};
+
+// ── SCRAPER INIT ─────────────────────────────────────────────
+function initScraper() {
+  // Search type toggle
+  document.getElementById('scraperSearchType').addEventListener('change', function () {
+    document.getElementById('customKeywordGroup').style.display = this.value === 'custom' ? '' : 'none';
+  });
+
+  // Filter controls — debounced refetch
+  const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+  const onFilterChange = debounce(() => fetchLeads(), 400);
+
+  document.getElementById('filterMinScore').addEventListener('input', function () {
+    document.getElementById('filterMinScoreVal').textContent = this.value;
+    onFilterChange();
+  });
+  document.getElementById('filterMaxScore').addEventListener('input', function () {
+    document.getElementById('filterMaxScoreVal').textContent = this.value;
+    onFilterChange();
+  });
+  document.getElementById('filterLocation').addEventListener('input', onFilterChange);
+  document.getElementById('filterHasWebsite').addEventListener('change', onFilterChange);
+  document.getElementById('filterStatus').addEventListener('change', onFilterChange);
+  document.getElementById('filterSort').addEventListener('change', onFilterChange);
+
+  // Run scrape button
+  document.getElementById('btnRunScrape').addEventListener('click', runScrape);
+
+  // Bulk skip
+  document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
+
+  // Export CSV
+  document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
+
+  // Close bulk dropdown on outside click
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#bulkPushDropdown')) {
+      document.getElementById('bulkSeqMenu').classList.remove('open');
+    }
+  });
+
+  // Bulk push dropdown toggle
+  document.getElementById('btnBulkPush').addEventListener('click', e => {
+    e.stopPropagation();
+    populateBulkSeqMenu();
+    document.getElementById('bulkSeqMenu').classList.toggle('open');
+  });
+
+  // Event delegation on leads list
+  document.getElementById('leadsList').addEventListener('click', handleLeadAction);
+  document.getElementById('leadsList').addEventListener('change', handleLeadCheckbox);
+
+  // Fetch initial data when tab opens
+  fetchLeads();
+  fetchScraperStats();
+}
+
+// ── RUN SCRAPE ───────────────────────────────────────────────
+async function runScrape() {
+  const btn = document.getElementById('btnRunScrape');
+  btn.disabled = true;
+
+  const body = {
+    searchType: document.getElementById('scraperSearchType').value,
+    location: document.getElementById('scraperLocation').value.trim() || 'United States',
+    maxResults: Number(document.getElementById('scraperMaxResults').value) || 200,
+    customKeyword: document.getElementById('scraperCustomKeyword').value.trim() || null,
+  };
+
+  showScrapeProgress('Starting scrape…');
+
+  try {
+    const res = await fetch('/api/scraper/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!data.success) throw new Error(data.error);
+
+    scrapeRunId = data.runId;
+    showScrapeProgress('Scraping Google Maps… this may take a few minutes');
+    scrapePollTimer = setInterval(pollScrapeStatus, 5000);
+  } catch (err) {
+    hideScrapeProgress();
+    btn.disabled = false;
+    alert('Scrape failed: ' + err.message);
+  }
+}
+
+async function pollScrapeStatus() {
+  if (!scrapeRunId) return;
+  try {
+    const res = await fetch('/api/scraper/status/' + scrapeRunId);
+    const data = await res.json();
+
+    if (data.status === 'RUNNING' || data.status === 'READY') {
+      showScrapeProgress(`Scraping… ${data.itemCount ? data.itemCount + ' places found so far' : 'in progress'}`);
+    } else if (data.status === 'PROCESSING') {
+      showScrapeProgress('Scoring leads with Claude AI…');
+    } else if (data.status === 'DONE') {
+      clearInterval(scrapePollTimer);
+      scrapePollTimer = null;
+      scrapeRunId = null;
+      hideScrapeProgress();
+      document.getElementById('btnRunScrape').disabled = false;
+      fetchLeads();
+      fetchScraperStats();
+    } else if (data.status === 'FAILED' || data.status === 'ABORTED' || data.status === 'ERROR') {
+      clearInterval(scrapePollTimer);
+      scrapePollTimer = null;
+      scrapeRunId = null;
+      hideScrapeProgress();
+      document.getElementById('btnRunScrape').disabled = false;
+      alert('Scrape error: ' + (data.error || data.status));
+    }
+  } catch {
+    // network hiccup, keep polling
+  }
+}
+
+function showScrapeProgress(msg) {
+  const el = document.getElementById('scrapeProgress');
+  document.getElementById('scrapeProgressMsg').textContent = msg;
+  el.style.display = '';
+}
+function hideScrapeProgress() {
+  document.getElementById('scrapeProgress').style.display = 'none';
+}
+
+// ── FETCH LEADS ──────────────────────────────────────────────
+async function fetchLeads() {
+  const params = new URLSearchParams({
+    minScore: document.getElementById('filterMinScore').value,
+    maxScore: document.getElementById('filterMaxScore').value,
+    sort: document.getElementById('filterSort').value,
+  });
+  const loc = document.getElementById('filterLocation').value.trim();
+  const website = document.getElementById('filterHasWebsite').value;
+  const status = document.getElementById('filterStatus').value;
+  if (loc) params.set('location', loc);
+  if (website) params.set('hasWebsite', website);
+  if (status) params.set('status', status);
+
+  currentLeadFilters = Object.fromEntries(params);
+
+  try {
+    const res = await fetch('/api/scraper/leads?' + params);
+    const data = await res.json();
+    if (data.success) renderLeadCards(data.leads, data.total);
+  } catch { /* silent */ }
+}
+
+async function fetchScraperStats() {
+  try {
+    const res = await fetch('/api/scraper/stats');
+    const data = await res.json();
+    if (data.success) {
+      const s = data.stats;
+      document.getElementById('scraperStatTotal').textContent = s.total;
+      document.getElementById('scraperStatScored').textContent = s.scored;
+      document.getElementById('scraperStatPushed').textContent = s.pushed;
+      document.getElementById('scraperStatSkipped').textContent = s.skipped;
+      const badge = document.getElementById('scraperBadge');
+      if (s.new > 0) { badge.textContent = s.new; badge.style.display = ''; }
+      else badge.style.display = 'none';
+    }
+  } catch { /* silent */ }
+}
+
+// ── RENDER LEAD CARDS ────────────────────────────────────────
+function renderLeadCards(leads) {
+  const container = document.getElementById('leadsList');
+  if (!leads || !leads.length) {
+    container.innerHTML = `<div class="empty-state">
+      <div class="empty-icon">🔍</div>
+      <div class="empty-title">No leads match your filters</div>
+      <div class="empty-sub">Try adjusting the score range or location filter</div>
+    </div>`;
+    return;
+  }
+
+  container.innerHTML = leads.map(lead => {
+    const scoreClass = lead.score >= 8 ? 'score-high' : lead.score >= 5 ? 'score-mid' : lead.score ? 'score-low' : 'score-none';
+    const scoreLabel = lead.score != null ? lead.score + '/10' : 'Unscored';
+    const isSelected = selectedLeadIds.has(lead.id);
+    const statusBadge = lead.status === 'pushed'
+      ? `<span class="status-badge-pushed">Pushed → ${esc(lead.pushedToSequence || 'Sequence')}</span>`
+      : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
+      : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
+
+    const actions = lead.status === 'new' || lead.status === 'error' ? `
+      <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
+        <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
+          <button class="btn-seq" data-action="open-seq" data-lead-id="${esc(lead.id)}">→ Add to Sequence ▾</button>
+          <div class="dropdown-menu" id="lead-seq-menu-${esc(lead.id)}">
+            ${sequences.filter(s => s.active).map(s => `
+              <div class="dropdown-item" data-action="push-lead" data-lead-id="${esc(lead.id)}" data-seq-id="${esc(s.id)}" data-seq-name="${esc(s.name)}">${esc(s.name)}</div>
+            `).join('')}
+          </div>
+        </div>
+        <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
+      </div>` : `<div class="lead-actions">${statusBadge}</div>`;
+
+    return `<div class="lead-card ${scoreClass} status-${esc(lead.status)}" data-lead-id="${esc(lead.id)}">
+      <div class="lead-card-header">
+        <input type="checkbox" class="lead-checkbox" data-lead-id="${esc(lead.id)}" ${isSelected ? 'checked' : ''}>
+        <div class="lead-title-row">
+          <span class="lead-name">${esc(lead.name)}</span>
+          <span class="score-badge ${scoreClass}">${scoreLabel}</span>
+          ${!lead.hasWebsite ? '<span class="no-website-badge">No Website</span>' : ''}
+        </div>
+      </div>
+      <div class="lead-meta">
+        ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
+        ${lead.category ? `<span>${esc(lead.category)}</span><span class="lead-meta-sep">·</span>` : ''}
+        ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
+        ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
+      </div>
+      ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
+      ${actions}
+    </div>`;
+  }).join('');
+}
+
+// ── LEAD ACTION HANDLER (event delegation) ───────────────────
+function handleLeadAction(e) {
+  const target = e.target.closest('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+  const leadId = target.dataset.leadId;
+
+  if (action === 'open-seq') {
+    e.stopPropagation();
+    // Close all other lead dropdowns
+    document.querySelectorAll('.dropdown-menu.open').forEach(m => {
+      if (m.id !== 'lead-seq-menu-' + leadId) m.classList.remove('open');
+    });
+    document.getElementById('lead-seq-menu-' + leadId)?.classList.toggle('open');
+  }
+
+  if (action === 'push-lead') {
+    const seqId = target.dataset.seqId;
+    const seqName = target.dataset.seqName;
+    pushSingleLead(leadId, seqId, seqName);
+  }
+
+  if (action === 'skip-lead') {
+    skipSingleLead(leadId);
+  }
+}
+
+function handleLeadCheckbox(e) {
+  if (!e.target.classList.contains('lead-checkbox')) return;
+  const id = e.target.dataset.leadId;
+  if (e.target.checked) selectedLeadIds.add(id);
+  else selectedLeadIds.delete(id);
+  updateBulkBar();
+}
+
+// Close lead dropdowns on outside click
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dropdown')) {
+    document.querySelectorAll('#leadsList .dropdown-menu.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
+// ── SINGLE LEAD PUSH ─────────────────────────────────────────
+async function pushSingleLead(leadId, seqId, seqName) {
+  setLeadState(leadId, 'loading', `Adding to ${seqName}…`);
+  try {
+    const res = await fetch('/api/scraper/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads: [{ id: leadId }], sequenceId: seqId, sequenceName: seqName }),
+    });
+    const data = await res.json();
+    if (!data.success || data.failed > 0) {
+      const err = data.results?.[0]?.error || 'Failed';
+      setLeadState(leadId, 'error', '✕ ' + err);
+    } else {
+      setLeadState(leadId, 'success', '✓ Added to ' + seqName);
+      setTimeout(() => { fetchLeads(); fetchScraperStats(); }, 1500);
+    }
+  } catch (err) {
+    setLeadState(leadId, 'error', '✕ ' + err.message);
+  }
+}
+
+async function skipSingleLead(leadId) {
+  setLeadState(leadId, 'loading', 'Skipping…');
+  try {
+    await fetch('/api/scraper/skip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [leadId] }),
+    });
+    setTimeout(() => { fetchLeads(); fetchScraperStats(); }, 600);
+  } catch { /* silent */ }
+}
+
+function setLeadState(leadId, state, msg) {
+  const actionsEl = document.getElementById('lead-actions-' + leadId);
+  if (!actionsEl) return;
+  const cls = state === 'success' ? 'success' : state === 'error' ? 'error' : '';
+  actionsEl.innerHTML = `<div class="lead-state-msg ${cls}">${esc(msg)}</div>`;
+}
+
+// ── BULK ACTIONS ─────────────────────────────────────────────
+function updateBulkBar() {
+  const bar = document.getElementById('bulkActions');
+  const count = selectedLeadIds.size;
+  if (count > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('bulkCount').textContent = count + ' selected';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function populateBulkSeqMenu() {
+  const menu = document.getElementById('bulkSeqMenu');
+  menu.innerHTML = sequences.filter(s => s.active).map(s =>
+    `<div class="dropdown-item" data-bulk-seq-id="${esc(s.id)}" data-bulk-seq-name="${esc(s.name)}">${esc(s.name)}</div>`
+  ).join('');
+  menu.querySelectorAll('.dropdown-item').forEach(item => {
+    item.addEventListener('click', () => {
+      pushSelected(item.dataset.bulkSeqId, item.dataset.bulkSeqName);
+      menu.classList.remove('open');
+    });
+  });
+}
+
+async function pushSelected(seqId, seqName) {
+  if (!selectedLeadIds.size) return;
+  const leads = Array.from(selectedLeadIds).map(id => ({ id }));
+  try {
+    const res = await fetch('/api/scraper/push', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leads, sequenceId: seqId, sequenceName: seqName }),
+    });
+    const data = await res.json();
+    selectedLeadIds.clear();
+    updateBulkBar();
+    fetchLeads();
+    fetchScraperStats();
+    if (data.failed > 0) alert(`${data.pushed} pushed, ${data.failed} failed.`);
+  } catch (err) {
+    alert('Push failed: ' + err.message);
+  }
+}
+
+async function skipSelected() {
+  if (!selectedLeadIds.size) return;
+  const ids = Array.from(selectedLeadIds);
+  await fetch('/api/scraper/skip', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  selectedLeadIds.clear();
+  updateBulkBar();
+  fetchLeads();
+  fetchScraperStats();
+}
+
+function exportCSV() {
+  const params = new URLSearchParams(currentLeadFilters);
+  window.location.href = '/api/scraper/export?' + params;
+}
+
+// ── WIRE SCRAPER INTO TAB SYSTEM ─────────────────────────────
+// (extends the existing tab click handler)
+const _origTabHandler = document.querySelector('.tab-nav').onclick;
+document.querySelector('.tab-nav').addEventListener('click', e => {
+  const btn = e.target.closest('.tab-btn');
+  if (btn && btn.dataset.tab === 'scraper') {
+    fetchLeads();
+    fetchScraperStats();
+  }
+});
+
+// Init scraper on load
+initScraper();
