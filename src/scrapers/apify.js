@@ -26,12 +26,16 @@ async function runGoogleMapsScrape({ searchType = 'orthodox', location = 'United
     searchTerms = keywords.map(k => `${k} ${location}`);
   }
 
+  const perSearch = Math.ceil(maxResults / searchTerms.length);
   const input = {
     searchStringsArray: searchTerms,
-    maxCrawledPlacesPerSearch: Math.ceil(maxResults / searchTerms.length),
+    maxCrawledPlaces: maxResults,
+    maxCrawledPlacesPerSearch: perSearch,
     language: 'en',
     maxImages: 0,
     maxReviews: 0,
+    includeOpeningHours: false,
+    additionalInfo: false,
   };
 
   const res = await axios.post(
