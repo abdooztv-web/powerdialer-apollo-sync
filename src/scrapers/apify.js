@@ -2,7 +2,7 @@ const axios = require('axios');
 
 const APIFY_BASE = 'https://api.apify.com/v2';
 // Google Maps Scraper actor maintained by Apify
-const ACTOR_ID = 'nwua9Wd5YkwerdjjT';
+const ACTOR_ID = 'apify~google-maps-scraper';
 
 function headers() {
   return { Authorization: `Bearer ${process.env.APIFY_API_TOKEN}` };
