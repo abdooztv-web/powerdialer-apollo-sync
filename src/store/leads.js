@@ -1,21 +1,15 @@
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 
-const DATA_FILE = path.join(__dirname, '../../data/leads.json');
+// In-memory store — works on Vercel serverless (POC)
+// Leads persist for the lifetime of the server process
+let leadsStore = [];
 
 function readAll() {
-  if (!fs.existsSync(DATA_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
+  return leadsStore;
 }
 
 function writeAll(leads) {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(leads, null, 2));
+  leadsStore = leads;
 }
 
 function saveLeads(newLeads) {
