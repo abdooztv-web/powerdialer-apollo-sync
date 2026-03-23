@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = 'claude-3-5-haiku-20241022';
 const BATCH_SIZE = 10;
 
 function buildPrompt(lead) {
