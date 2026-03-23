@@ -437,6 +437,7 @@ let scrapeRunId = null;
 let scrapePollTimer = null;
 let selectedLeadIds = new Set();
 let currentLeadFilters = {};
+let currentLeads = []; // all leads currently loaded in the browser
 
 // ── SCRAPER INIT ─────────────────────────────────────────────
 function initScraper() {
@@ -598,7 +599,10 @@ async function fetchLeads() {
   try {
     const res = await fetch('/api/scraper/leads?' + params + '&_=' + Date.now());
     const data = await res.json();
-    if (data.success) renderLeadCards(data.leads, data.total);
+    if (data.success) {
+      currentLeads = data.leads;
+      renderLeadCards(data.leads, data.total);
+    }
   } catch { /* silent */ }
 }
 
@@ -817,8 +821,25 @@ async function skipSelected() {
 }
 
 function exportCSV() {
-  const params = new URLSearchParams(currentLeadFilters);
-  window.location.href = '/api/scraper/export?' + params;
+  const leads = currentLeads.length ? currentLeads : [];
+  if (!leads.length) { alert('No leads to export. Run a scrape first.'); return; }
+
+  const headers = ['Name','Phone','Website','Has Website','Category','Address','City','State','Reviews','Rating','Score','Score Reason','Suggested Sequence','Status','Scraped At'];
+  const rows = leads.map(l => [
+    l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
+    l.category||'', l.address||'', l.city||'', l.state||'',
+    l.reviewCount||0, l.rating||'', l.score||'', l.scoreReason||'',
+    l.suggestedSequence||'', l.status||'', l.scrapedAt||''
+  ].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(','));
+
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'church-leads-' + Date.now() + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── WIRE SCRAPER INTO TAB SYSTEM ─────────────────────────────
