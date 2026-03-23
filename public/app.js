@@ -471,6 +471,18 @@ function initScraper() {
   // Export CSV
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
 
+  // Select All
+  document.getElementById('selectAllLeads').addEventListener('change', function () {
+    const checkboxes = document.querySelectorAll('#leadsList .lead-checkbox');
+    checkboxes.forEach(cb => {
+      cb.checked = this.checked;
+      const id = cb.dataset.leadId;
+      if (this.checked) selectedLeadIds.add(id);
+      else selectedLeadIds.delete(id);
+    });
+    updateBulkBar();
+  });
+
   // Close bulk dropdown on outside click
   document.addEventListener('click', e => {
     if (!e.target.closest('#bulkPushDropdown')) {
@@ -584,7 +596,7 @@ async function fetchLeads() {
   currentLeadFilters = Object.fromEntries(params);
 
   try {
-    const res = await fetch('/api/scraper/leads?' + params);
+    const res = await fetch('/api/scraper/leads?' + params + '&_=' + Date.now());
     const data = await res.json();
     if (data.success) renderLeadCards(data.leads, data.total);
   } catch { /* silent */ }

@@ -250,7 +250,16 @@
           </div>
         </div>
 
-        <!-- Bulk Actions Bar -->
+        <!-- Leads Toolbar (always visible) -->
+        <div class="leads-toolbar">
+          <label class="form-check">
+            <input type="checkbox" id="selectAllLeads">
+            <span>Select All</span>
+          </label>
+          <button class="btn-outline" id="btnExportCSV">⬇ Export CSV</button>
+        </div>
+
+        <!-- Bulk Actions Bar (visible when items selected) -->
         <div class="bulk-actions" id="bulkActions" style="display:none">
           <span id="bulkCount">0 selected</span>
           <div class="bulk-btns">
@@ -259,7 +268,6 @@
               <div class="dropdown-menu" id="bulkSeqMenu"></div>
             </div>
             <button class="btn-skip-bulk" id="btnBulkSkip">Skip Selected</button>
-            <button class="btn-outline" id="btnExportCSV">⬇ Export CSV</button>
           </div>
         </div>
 

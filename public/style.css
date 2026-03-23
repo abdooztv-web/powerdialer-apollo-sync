@@ -868,3 +868,12 @@ body {
 }
 .lead-state-msg.success { color: var(--success); }
 .lead-state-msg.error   { color: var(--danger); }
+
+/* Leads toolbar */
+.leads-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  margin-bottom: 8px;
+}
