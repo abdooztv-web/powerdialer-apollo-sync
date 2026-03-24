@@ -105,7 +105,7 @@ router.get('/claude-test', async (req, res) => {
   try {
     const axios = require('axios');
     const r = await axios.post('https://api.anthropic.com/v1/messages',
-      { model: 'claude-3-5-haiku-20241022', max_tokens: 20, messages: [{ role: 'user', content: 'Reply with: ok' }] },
+      { model: 'claude-haiku-4-5-20251001', max_tokens: 20, messages: [{ role: 'user', content: 'Reply with: ok' }] },
       { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     );
     res.json({ ok: true, response: r.data.content[0].text });
