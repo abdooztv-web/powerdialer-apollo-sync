@@ -22,7 +22,7 @@ function fallbackScore(lead) {
 // POST /api/scraper/run
 router.post('/run', async (req, res) => {
   try {
-    const { searchType = 'orthodox', location = 'United States', maxResults = 200, customKeyword = null } = req.body;
+    const { searchType = 'orthodox', location = 'United States', maxResults = 200, customKeyword = null, websiteFilter = 'all' } = req.body;
 
     if (!process.env.APIFY_API_TOKEN) {
       return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
@@ -30,7 +30,7 @@ router.post('/run', async (req, res) => {
 
     const { runId, datasetId } = await runGoogleMapsScrape({ searchType, location, maxResults: Number(maxResults), customKeyword });
 
-    activeJobs.set(runId, { status: 'RUNNING', datasetId, startedAt: new Date().toISOString(), scored: false });
+    activeJobs.set(runId, { status: 'RUNNING', datasetId, startedAt: new Date().toISOString(), scored: false, websiteFilter });
 
     logger.info('Scrape job started', { runId, searchType, location, maxResults });
     res.json({ success: true, runId, datasetId });
@@ -54,7 +54,10 @@ router.get('/status/:runId', async (req, res) => {
 
       // Synchronous: fetch + score + save within this request (required for Vercel)
       try {
-        const raw = await fetchResults(apifyStatus.datasetId);
+        let raw = await fetchResults(apifyStatus.datasetId);
+        // Apply website filter
+        if (job.websiteFilter === 'no-website') raw = raw.filter(r => !r.hasWebsite);
+        else if (job.websiteFilter === 'has-website') raw = raw.filter(r => r.hasWebsite);
         const withIds = raw.map(r => ({ ...r, id: generateId(), status: 'new', scrapedAt: new Date().toISOString() }));
 
         let scored;

@@ -512,11 +512,13 @@ async function runScrape() {
   const btn = document.getElementById('btnRunScrape');
   btn.disabled = true;
 
+  const websiteFilter = document.getElementById('scraperWebsiteFilter').value;
   const body = {
     searchType: document.getElementById('scraperSearchType').value,
     location: document.getElementById('scraperLocation').value.trim() || 'United States',
     maxResults: Number(document.getElementById('scraperMaxResults').value) || 200,
     customKeyword: document.getElementById('scraperCustomKeyword').value.trim() || null,
+    websiteFilter,
   };
 
   showScrapeProgress('Starting scrape…');
