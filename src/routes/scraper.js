@@ -70,7 +70,7 @@ router.get('/status/:runId', async (req, res) => {
           scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
         }
 
-        const added = saveLeads(scored);
+        const added = await saveLeads(scored);
         activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added });
         logger.info('Scrape complete', { runId, total: raw.length, added });
         return res.json({ success: true, status: 'DONE', count: added });
@@ -96,10 +96,10 @@ router.get('/status/:runId', async (req, res) => {
 });
 
 // GET /api/scraper/leads
-router.get('/leads', (req, res) => {
+router.get('/leads', async (req, res) => {
   try {
     const { minScore, maxScore, location, hasWebsite, status, sort, limit, offset } = req.query;
-    const result = getLeads({ minScore, maxScore, location, hasWebsite, status, sort, limit, offset });
+    const result = await getLeads({ minScore, maxScore, location, hasWebsite, status, sort, limit, offset });
     res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -107,9 +107,10 @@ router.get('/leads', (req, res) => {
 });
 
 // GET /api/scraper/stats
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    res.json({ success: true, stats: getStats() });
+    const stats = await getStats();
+    res.json({ success: true, stats });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -134,13 +135,13 @@ router.post('/push', async (req, res) => {
       }
 
       if (!contactId) {
-        updateLead(item.id, { status: 'error', errorMsg: 'No Apollo contact found' });
+        await updateLead(item.id, { status: 'error', errorMsg: 'No Apollo contact found' });
         results.push({ id: item.id, success: false, error: 'No Apollo contact found' });
         continue;
       }
 
       await addToSequence(contactId, sequenceId);
-      updateLead(item.id, {
+      await updateLead(item.id, {
         status: 'pushed',
         pushedAt: new Date().toISOString(),
         pushedToSequence: sequenceName || sequenceId,
@@ -148,7 +149,7 @@ router.post('/push', async (req, res) => {
       });
       results.push({ id: item.id, success: true });
     } catch (err) {
-      updateLead(item.id, { status: 'error', errorMsg: err.message });
+      await updateLead(item.id, { status: 'error', errorMsg: err.message });
       results.push({ id: item.id, success: false, error: err.message });
     }
   }
@@ -158,17 +159,17 @@ router.post('/push', async (req, res) => {
 });
 
 // POST /api/scraper/skip
-router.post('/skip', (req, res) => {
+router.post('/skip', async (req, res) => {
   const { ids = [] } = req.body;
-  ids.forEach(id => updateLead(id, { status: 'skipped' }));
+  await Promise.all(ids.map(id => updateLead(id, { status: 'skipped' })));
   res.json({ success: true, skipped: ids.length });
 });
 
 // GET /api/scraper/export
-router.get('/export', (req, res) => {
+router.get('/export', async (req, res) => {
   try {
     const { minScore, maxScore, location, hasWebsite, status, sort } = req.query;
-    const csv = exportCSV({ minScore, maxScore, location, hasWebsite, status, sort });
+    const csv = await exportCSV({ minScore, maxScore, location, hasWebsite, status, sort });
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="church-leads-${Date.now()}.csv"`);
     res.send(csv);
