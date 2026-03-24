@@ -95,6 +95,21 @@ router.get('/status/:runId', async (req, res) => {
   }
 });
 
+// GET /api/scraper/db-test  — quick connection diagnostic
+router.get('/db-test', async (req, res) => {
+  const uri = process.env.DATABASE_URL;
+  if (!uri) return res.json({ ok: false, error: 'DATABASE_URL is not set in Vercel env vars' });
+  try {
+    const { Pool } = require('pg');
+    const p = new Pool({ connectionString: uri, ssl: { rejectUnauthorized: false } });
+    await p.query('SELECT 1');
+    await p.end();
+    res.json({ ok: true, message: 'Database connected successfully' });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
+
 // GET /api/scraper/leads
 router.get('/leads', async (req, res) => {
   try {
@@ -102,6 +117,7 @@ router.get('/leads', async (req, res) => {
     const result = await getLeads({ minScore, maxScore, location, hasWebsite, status, sort, limit, offset });
     res.json({ success: true, ...result });
   } catch (err) {
+    logger.error('getLeads failed', { error: err.message, stack: err.stack });
     res.status(500).json({ success: false, error: err.message });
   }
 });
