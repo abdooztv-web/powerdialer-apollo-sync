@@ -1,18 +1,56 @@
 const crypto = require('crypto');
-const { MongoClient } = require('mongodb');
+const { Pool } = require('pg');
 
-const MONGO_URI = process.env.MONGODB_URI;
-let client = null;
-let db = null;
+let pool = null;
 
-async function getCollection() {
-  if (!MONGO_URI) throw new Error('MONGODB_URI env var is not set');
-  if (!client) {
-    client = new MongoClient(MONGO_URI, { maxPoolSize: 5 });
-    await client.connect();
-    db = client.db('churchleads');
+function getPool() {
+  if (!pool) {
+    if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL env var is not set');
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 5,
+    });
   }
-  return db.collection('leads');
+  return pool;
+}
+
+async function initTable() {
+  const client = await getPool().connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS leads (
+        id TEXT PRIMARY KEY,
+        "placeId" TEXT UNIQUE,
+        name TEXT,
+        phone TEXT,
+        website TEXT,
+        "hasWebsite" BOOLEAN DEFAULT false,
+        category TEXT,
+        address TEXT,
+        city TEXT,
+        state TEXT,
+        "reviewCount" INTEGER DEFAULT 0,
+        rating NUMERIC,
+        score INTEGER,
+        "scoreReason" TEXT,
+        "suggestedSequence" TEXT,
+        status TEXT DEFAULT 'new',
+        "scrapedAt" TIMESTAMPTZ DEFAULT NOW(),
+        "apolloId" TEXT,
+        data JSONB
+      );
+      CREATE INDEX IF NOT EXISTS leads_score_idx ON leads(score DESC);
+      CREATE INDEX IF NOT EXISTS leads_status_idx ON leads(status);
+    `);
+  } finally {
+    client.release();
+  }
+}
+
+let tableReady = false;
+async function ensureTable() {
+  if (!tableReady) { await initTable(); tableReady = true; }
 }
 
 function generateId() {
@@ -20,88 +58,104 @@ function generateId() {
 }
 
 async function saveLeads(newLeads) {
-  const col = await getCollection();
+  await ensureTable();
+  const client = await getPool().connect();
   let added = 0;
-  for (const lead of newLeads) {
-    const filter = lead.placeId ? { placeId: lead.placeId } : { id: lead.id };
-    const result = await col.updateOne(filter, { $setOnInsert: lead }, { upsert: true });
-    if (result.upsertedCount > 0) added++;
+  try {
+    for (const lead of newLeads) {
+      const id = lead.id || generateId();
+      const res = await client.query(`
+        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", data)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        ON CONFLICT ("placeId") DO NOTHING
+        RETURNING id
+      `, [
+        id, lead.placeId || null, lead.name || null, lead.phone || null,
+        lead.website || null, lead.hasWebsite || false, lead.category || null,
+        lead.address || null, lead.city || null, lead.state || null,
+        lead.reviewCount || 0, lead.rating || null, lead.score || null,
+        lead.scoreReason || null, lead.suggestedSequence || null,
+        lead.status || 'new', lead.scrapedAt || new Date().toISOString(),
+        JSON.stringify(lead)
+      ]);
+      if (res.rowCount > 0) added++;
+    }
+  } finally {
+    client.release();
   }
   return added;
 }
 
 async function getLeads(filters = {}) {
-  const col = await getCollection();
-  const query = {};
+  await ensureTable();
+  const conditions = [];
+  const values = [];
+  let i = 1;
 
-  if (filters.minScore !== undefined || filters.maxScore !== undefined) {
-    query.score = {};
-    if (filters.minScore !== undefined) query.score.$gte = Number(filters.minScore);
-    if (filters.maxScore !== undefined) query.score.$lte = Number(filters.maxScore);
-  }
+  if (filters.minScore !== undefined) { conditions.push(`score >= $${i++}`); values.push(Number(filters.minScore)); }
+  if (filters.maxScore !== undefined) { conditions.push(`score <= $${i++}`); values.push(Number(filters.maxScore)); }
   if (filters.location) {
-    const loc = filters.location;
-    query.$or = [
-      { city: { $regex: loc, $options: 'i' } },
-      { state: { $regex: loc, $options: 'i' } },
-      { address: { $regex: loc, $options: 'i' } },
-    ];
+    conditions.push(`(city ILIKE $${i} OR state ILIKE $${i} OR address ILIKE $${i})`);
+    values.push(`%${filters.location}%`); i++;
   }
-  if (filters.hasWebsite === 'false') query.hasWebsite = false;
-  else if (filters.hasWebsite === 'true') query.hasWebsite = true;
-  if (filters.status) query.status = filters.status;
+  if (filters.hasWebsite === 'false') { conditions.push(`"hasWebsite" = false`); }
+  else if (filters.hasWebsite === 'true') { conditions.push(`"hasWebsite" = true`); }
+  if (filters.status) { conditions.push(`status = $${i++}`); values.push(filters.status); }
 
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
   const sort = filters.sort || 'score';
-  const mongoSort = sort === 'score' ? { score: -1 }
-    : sort === 'date' ? { scrapedAt: -1 }
-    : sort === 'name' ? { name: 1 }
-    : { score: -1 };
+  const orderBy = sort === 'score' ? 'score DESC NULLS LAST'
+    : sort === 'date' ? '"scrapedAt" DESC'
+    : sort === 'name' ? 'name ASC'
+    : 'score DESC NULLS LAST';
 
   const offset = filters.offset ? Number(filters.offset) : 0;
-  const limit = filters.limit ? Number(filters.limit) : 0;
+  const limit = filters.limit ? Number(filters.limit) : 1000;
 
-  const total = await col.countDocuments(query);
-  const leads = await col.find(query).sort(mongoSort).skip(offset).limit(limit).toArray();
+  const pool = getPool();
+  const [countRes, rowsRes] = await Promise.all([
+    pool.query(`SELECT COUNT(*) FROM leads ${where}`, values),
+    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
+  ]);
 
-  // Remove MongoDB _id from response
-  leads.forEach(l => { delete l._id; });
-
-  return { leads, total };
+  return { leads: rowsRes.rows, total: parseInt(countRes.rows[0].count) };
 }
 
 async function updateLead(id, updates) {
-  const col = await getCollection();
-  const result = await col.findOneAndUpdate(
-    { id },
-    { $set: updates },
-    { returnDocument: 'after' }
+  await ensureTable();
+  const fields = Object.keys(updates).map((k, i) => `"${k}" = $${i + 2}`).join(', ');
+  const values = [id, ...Object.values(updates)];
+  const res = await getPool().query(
+    `UPDATE leads SET ${fields} WHERE id = $1 RETURNING *`,
+    values
   );
-  if (!result) return null;
-  delete result._id;
-  return result;
+  return res.rows[0] || null;
 }
 
 async function getStats() {
-  const col = await getCollection();
-  const [total, scored, pushed, skipped, newLeads] = await Promise.all([
-    col.countDocuments({}),
-    col.countDocuments({ score: { $ne: null } }),
-    col.countDocuments({ status: 'pushed' }),
-    col.countDocuments({ status: 'skipped' }),
-    col.countDocuments({ status: 'new' }),
-  ]);
-  return { total, scored, pushed, skipped, new: newLeads };
+  await ensureTable();
+  const res = await getPool().query(`
+    SELECT
+      COUNT(*) as total,
+      COUNT(*) FILTER (WHERE score IS NOT NULL) as scored,
+      COUNT(*) FILTER (WHERE status = 'pushed') as pushed,
+      COUNT(*) FILTER (WHERE status = 'skipped') as skipped,
+      COUNT(*) FILTER (WHERE status = 'new') as new
+    FROM leads
+  `);
+  const r = res.rows[0];
+  return { total: +r.total, scored: +r.scored, pushed: +r.pushed, skipped: +r.skipped, new: +r.new };
 }
 
 async function exportCSV(filters = {}) {
-  const { leads } = await getLeads(filters);
-  const headers = ['Name', 'Phone', 'Website', 'Has Website', 'Category', 'Address', 'City', 'State', 'Reviews', 'Rating', 'Score', 'Score Reason', 'Suggested Sequence', 'Status', 'Scraped At'];
+  const { leads } = await getLeads({ ...filters, limit: 10000 });
+  const headers = ['Name','Phone','Website','Has Website','Category','Address','City','State','Reviews','Rating','Score','Score Reason','Suggested Sequence','Status','Scraped At'];
   const rows = leads.map(l => [
-    l.name || '', l.phone || '', l.website || '', l.hasWebsite ? 'Yes' : 'No',
-    l.category || '', l.address || '', l.city || '', l.state || '',
-    l.reviewCount || 0, l.rating || '', l.score || '', l.scoreReason || '',
-    l.suggestedSequence || '', l.status || '', l.scrapedAt || '',
-  ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+    l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
+    l.category||'', l.address||'', l.city||'', l.state||'',
+    l.reviewCount||0, l.rating||'', l.score||'', l.scoreReason||'',
+    l.suggestedSequence||'', l.status||'', l.scrapedAt||''
+  ].map(v => `"${String(v).replace(/"/g,'""')}"`).join(','));
   return [headers.join(','), ...rows].join('\n');
 }
 
