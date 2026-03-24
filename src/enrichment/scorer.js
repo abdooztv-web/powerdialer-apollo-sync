@@ -71,11 +71,12 @@ async function scoreSingle(lead, apiKey) {
       suggestedSequence: parsed.suggestedSequence || 'skip',
     };
   } catch (err) {
-    // Fallback scoring if Claude API fails
+    const errDetail = err.response?.data || err.message;
+    console.error('Claude scoring error:', JSON.stringify(errDetail));
     return {
       ...lead,
       score: fallbackScore(lead),
-      scoreReason: 'Auto-scored (API unavailable)',
+      scoreReason: 'Auto-scored (API error: ' + (err.response?.data?.error?.message || err.message) + ')',
       suggestedSequence: fallbackScore(lead) >= 8 ? 'pastors' : fallbackScore(lead) >= 5 ? 'directors' : 'skip',
     };
   }

@@ -98,6 +98,22 @@ router.get('/status/:runId', async (req, res) => {
   }
 });
 
+// GET /api/scraper/claude-test
+router.get('/claude-test', async (req, res) => {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return res.json({ ok: false, error: 'ANTHROPIC_API_KEY is not set in Vercel env vars' });
+  try {
+    const axios = require('axios');
+    const r = await axios.post('https://api.anthropic.com/v1/messages',
+      { model: 'claude-3-5-haiku-20241022', max_tokens: 20, messages: [{ role: 'user', content: 'Reply with: ok' }] },
+      { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    );
+    res.json({ ok: true, response: r.data.content[0].text });
+  } catch (err) {
+    res.json({ ok: false, error: err.response?.data || err.message });
+  }
+});
+
 // GET /api/scraper/db-test  — quick connection diagnostic
 router.get('/db-test', async (req, res) => {
   const uri = process.env.DATABASE_URL;
