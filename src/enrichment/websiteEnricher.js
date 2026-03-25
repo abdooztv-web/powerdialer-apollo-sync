@@ -1,78 +1,129 @@
 const axios = require('axios');
 
-const PAGES_TO_TRY = ['', '/staff', '/about', '/leadership', '/clergy', '/contact', '/our-team', '/team', '/about-us', '/pastor', '/ministers', '/meet-the-staff'];
+const APIFY_BASE = 'https://api.apify.com/v2';
+const WEBSITE_CRAWLER_ACTOR = 'apify~website-content-crawler';
+const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-haiku-4-5-20251001';
 
-async function fetchPage(url) {
-  try {
-    const res = await axios.get(url, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-      maxContentLength: 300000,
-      httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-      maxRedirects: 5,
-    });
-    return res.data;
-  } catch {
-    return null;
-  }
+function apifyHeaders() {
+  return { Authorization: `Bearer ${process.env.APIFY_API_TOKEN}` };
 }
 
-function extractText(html) {
-  if (!html || typeof html !== 'string') return '';
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .substring(0, 3000);
-}
+/**
+ * Start an Apify website-content-crawler run for a given URL.
+ * Returns { enrichRunId, datasetId }
+ */
+async function startEnrichCrawl(website) {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) throw new Error('APIFY_API_TOKEN is not set');
 
-async function gatherWebsiteContent(website) {
-  const base = website.replace(/\/+$/, '');
-  let combined = '';
-
-  for (const page of PAGES_TO_TRY) {
-    const html = await fetchPage(base + page);
-    const text = extractText(html);
-    if (text.length > 100) {
-      combined += `\n--- ${page || '/'} ---\n${text}`;
-      if (combined.length > 7000) break;
-    }
-  }
-
-  return combined.substring(0, 7000);
-}
-
-async function extractContacts(content, churchName, apiKey) {
-  const prompt = `Extract ALL staff/leadership contacts from this church website content for "${churchName}".
-
-Find people with titles like: Pastor, Senior Pastor, Father, Reverend, Priest, Bishop, Director, Administrator, Minister, Deacon, Office Manager, Secretary, Youth Director, Music Director.
-
-Website content:
-${content}
-
-Return ONLY a valid JSON array, no other text:
-[{"name":"Full Name","title":"Their Title","email":"email or null","phone":"phone or null"}]
-
-If no contacts found return: []`;
+  const input = {
+    startUrls: [{ url: website }],
+    maxCrawlPages: 6,
+    maxCrawlDepth: 1,
+    crawlerType: 'cheerio',
+    htmlTransformer: 'readableText',
+  };
 
   const res = await axios.post(
-    'https://api.anthropic.com/v1/messages',
-    { model: 'claude-haiku-4-5-20251001', max_tokens: 800, messages: [{ role: 'user', content: prompt }] },
-    { headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    `${APIFY_BASE}/acts/${WEBSITE_CRAWLER_ACTOR}/runs`,
+    input,
+    { headers: { ...apifyHeaders(), 'Content-Type': 'application/json' } }
   );
 
-  let text = res.data.content[0].text.trim();
-  // Strip markdown code blocks
-  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  // Extract JSON array
-  const match = text.match(/\[[\s\S]*\]/);
-  return match ? JSON.parse(match[0]) : [];
+  const run = res.data.data;
+  return { enrichRunId: run.id, datasetId: run.defaultDatasetId };
 }
 
-module.exports = { gatherWebsiteContent, extractContacts };
+/**
+ * Check the status of an Apify run.
+ * Returns { status, datasetId, itemCount }
+ */
+async function getEnrichStatus(enrichRunId) {
+  const res = await axios.get(`${APIFY_BASE}/actor-runs/${enrichRunId}`, {
+    headers: apifyHeaders(),
+  });
+  const run = res.data.data;
+  return {
+    status: run.status,
+    datasetId: run.defaultDatasetId,
+    itemCount: run.stats?.itemCount || 0,
+  };
+}
+
+/**
+ * Fetch crawled page content from Apify dataset and extract contacts via Claude.
+ * Returns array of contact objects: { name, title, email, phone }
+ */
+async function extractContactsFromDataset(datasetId, churchName) {
+  const res = await axios.get(`${APIFY_BASE}/datasets/${datasetId}/items`, {
+    headers: apifyHeaders(),
+    params: { format: 'json', clean: true, limit: 50 },
+  });
+
+  const pages = res.data || [];
+  if (!pages.length) return [];
+
+  // Combine page text from all crawled pages
+  const combinedText = pages
+    .map(p => {
+      const url = p.url || p.loadedUrl || '';
+      const text = p.text || p.markdown || p.html || '';
+      return `URL: ${url}\n${text}`;
+    })
+    .join('\n\n---\n\n')
+    .slice(0, 12000); // cap to stay within token limits
+
+  return callClaudeForContacts(combinedText, churchName);
+}
+
+async function callClaudeForContacts(pageText, churchName) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return [];
+
+  const prompt = `You are analyzing church website content to find staff contacts.
+
+Church: ${churchName || 'Unknown Church'}
+
+Website content:
+${pageText}
+
+Extract all staff members / church leaders you can find (pastor, reverend, elder, deacon, administrator, director, minister, priest, secretary, etc.).
+
+Return ONLY valid JSON array, no other text:
+[{"name": "...", "title": "...", "email": "...", "phone": "..."}]
+
+Rules:
+- Use null for missing fields, not empty strings
+- Only include real people, not departments
+- If no contacts found, return []`;
+
+  try {
+    const res = await axios.post(
+      CLAUDE_API,
+      {
+        model: MODEL,
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }],
+      },
+      {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+        },
+      }
+    );
+
+    const text = res.data.content[0].text.trim();
+    // Extract JSON array even if wrapped in markdown
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    const parsed = JSON.parse(match[0]);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+module.exports = { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset };

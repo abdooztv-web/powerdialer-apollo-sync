@@ -439,6 +439,58 @@ let selectedLeadIds = new Set();
 let currentLeadFilters = {};
 let currentLeads = []; // all leads currently loaded in the browser
 
+// enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
+const enrichPollers = new Map();
+
+// ── ENRICH: WEBSITE CRAWLER POLLING ──────────────────────────
+async function startEnrich(leadId) {
+  try {
+    const res = await fetch('/api/scraper/enrich/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadId }),
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert('Enrich failed: ' + data.error);
+      return;
+    }
+
+    const enrichRunId = data.enrichRunId;
+    const intervalId = setInterval(() => pollEnrichStatus(leadId, enrichRunId), 3000);
+    enrichPollers.set(leadId, { enrichRunId, intervalId });
+
+    // Re-render to show "Crawling…" state
+    fetchLeads();
+  } catch (err) {
+    alert('Enrich error: ' + err.message);
+  }
+}
+
+async function pollEnrichStatus(leadId, enrichRunId) {
+  try {
+    const res = await fetch('/api/scraper/enrich/status/' + enrichRunId);
+    const data = await res.json();
+
+    if (data.status === 'DONE') {
+      const poller = enrichPollers.get(leadId);
+      if (poller) clearInterval(poller.intervalId);
+      enrichPollers.delete(leadId);
+      // Re-render leads to show staff directory
+      fetchLeads();
+      fetchScraperStats();
+    } else if (data.status === 'FAILED' || data.status === 'ABORTED' || data.status === 'ERROR') {
+      const poller = enrichPollers.get(leadId);
+      if (poller) clearInterval(poller.intervalId);
+      enrichPollers.delete(leadId);
+      fetchLeads();
+    }
+    // RUNNING / PROCESSING — keep polling
+  } catch {
+    // network hiccup, keep polling
+  }
+}
+
 // ── SCRAPER INIT ─────────────────────────────────────────────
 function initScraper() {
   // Search type toggle
@@ -649,6 +701,57 @@ async function fetchScraperStats() {
   } catch { /* silent */ }
 }
 
+// ── GROUP LEADS BY DATE ───────────────────────────────────────
+function groupByDate(leads) {
+  const groups = {};
+  leads.forEach(lead => {
+    const date = lead.scrapedAt
+      ? new Date(lead.scrapedAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : 'Unknown Date';
+    if (!groups[date]) groups[date] = [];
+    groups[date].push(lead);
+  });
+  return groups;
+}
+
+// ── RENDER STAFF DIRECTORY PANEL ─────────────────────────────
+function renderStaffDirectory(lead) {
+  const contacts = lead.contacts || [];
+
+  if (contacts.length === 0) {
+    if (lead.hasWebsite && lead.website) {
+      // Determine enrich button state
+      const enrichRunId = lead.enrichRunId;
+      const activeEnrich = enrichRunId && enrichPollers.has(lead.id);
+      if (activeEnrich) {
+        return `<div class="staff-directory">
+          <div class="staff-dir-title">STAFF DIRECTORY</div>
+          <div class="staff-crawling">🔍 Crawling website…</div>
+        </div>`;
+      }
+      return `<div class="staff-directory">
+        <div class="staff-dir-title">STAFF DIRECTORY</div>
+        <button class="btn-find-staff" data-action="find-staff" data-lead-id="${esc(lead.id)}">Find Staff →</button>
+      </div>`;
+    }
+    return '';
+  }
+
+  const rows = contacts.map((c, i) => `
+    <div class="staff-row">
+      <span class="staff-num">${i + 1}</span>
+      <span class="staff-name">${esc(c.name || '—')}</span>
+      ${c.title ? `<span class="staff-title-badge">${esc(c.title)}</span>` : ''}
+      ${c.email ? `<span class="staff-email">✉ ${esc(c.email)}</span>` : ''}
+      ${c.phone ? `<span class="staff-phone">📞 ${esc(c.phone)}</span>` : ''}
+    </div>`).join('');
+
+  return `<div class="staff-directory">
+    <div class="staff-dir-title">STAFF DIRECTORY <span class="staff-count">${contacts.length} found</span></div>
+    ${rows}
+  </div>`;
+}
+
 // ── RENDER LEAD CARDS ────────────────────────────────────────
 function renderLeadCards(leads) {
   const container = document.getElementById('leadsList');
@@ -661,60 +764,66 @@ function renderLeadCards(leads) {
     return;
   }
 
-  container.innerHTML = leads.map(lead => {
-    const scoreClass = lead.score >= 8 ? 'score-high' : lead.score >= 5 ? 'score-mid' : lead.score ? 'score-low' : 'score-none';
-    const scoreLabel = lead.score != null ? lead.score + '/10' : 'Unscored';
-    const isSelected = selectedLeadIds.has(lead.id);
-    const statusBadge = lead.status === 'pushed'
-      ? `<span class="status-badge-pushed">Pushed → ${esc(lead.pushedToSequence || 'Sequence')}</span>`
-      : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
-      : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
+  // Group by date
+  const groups = groupByDate(leads);
+  let globalIndex = 0;
+  const html = [];
 
-    const actions = lead.status === 'new' || lead.status === 'error' ? `
-      <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
-        <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
-          <button class="btn-seq" data-action="open-seq" data-lead-id="${esc(lead.id)}">→ Add to Sequence ▾</button>
-          <div class="dropdown-menu" id="lead-seq-menu-${esc(lead.id)}">
-            ${sequences.filter(s => s.active).map(s => `
-              <div class="dropdown-item" data-action="push-lead" data-lead-id="${esc(lead.id)}" data-seq-id="${esc(s.id)}" data-seq-name="${esc(s.name)}">${esc(s.name)}</div>
-            `).join('')}
+  Object.entries(groups).forEach(([date, groupLeads]) => {
+    html.push(`<div class="date-separator">
+      <span class="date-separator-label">📅 ${esc(date)} — ${groupLeads.length} lead${groupLeads.length !== 1 ? 's' : ''}</span>
+    </div>`);
+
+    groupLeads.forEach(lead => {
+      globalIndex++;
+      const cardNum = globalIndex;
+      const scoreClass = lead.score >= 8 ? 'score-high' : lead.score >= 5 ? 'score-mid' : lead.score ? 'score-low' : 'score-none';
+      const scoreLabel = lead.score != null ? lead.score + '/10' : 'Unscored';
+      const isSelected = selectedLeadIds.has(lead.id);
+      const statusBadge = lead.status === 'pushed'
+        ? `<span class="status-badge-pushed">Pushed → ${esc(lead.pushedToSequence || 'Sequence')}</span>`
+        : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
+        : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
+
+      const actions = lead.status === 'new' || lead.status === 'error' ? `
+        <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
+          <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
+            <button class="btn-seq" data-action="open-seq" data-lead-id="${esc(lead.id)}">→ Add to Sequence ▾</button>
+            <div class="dropdown-menu" id="lead-seq-menu-${esc(lead.id)}">
+              ${sequences.filter(s => s.active).map(s => `
+                <div class="dropdown-item" data-action="push-lead" data-lead-id="${esc(lead.id)}" data-seq-id="${esc(s.id)}" data-seq-name="${esc(s.name)}">${esc(s.name)}</div>
+              `).join('')}
+            </div>
+          </div>
+          <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
+        </div>` : `<div class="lead-actions">${statusBadge}</div>`;
+
+      const staffPanel = renderStaffDirectory(lead);
+
+      html.push(`<div class="lead-card ${scoreClass} status-${esc(lead.status)}" data-lead-id="${esc(lead.id)}">
+        <div class="lead-card-header">
+          <input type="checkbox" class="lead-checkbox" data-lead-id="${esc(lead.id)}" ${isSelected ? 'checked' : ''}>
+          <div class="lead-title-row">
+            <span class="lead-num">#${cardNum}</span>
+            <span class="lead-name">${esc(lead.name)}</span>
+            <span class="score-badge ${scoreClass}">${scoreLabel}</span>
+            ${!lead.hasWebsite ? '<span class="no-website-badge">No Website</span>' : ''}
           </div>
         </div>
-        <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
-      </div>` : `<div class="lead-actions">${statusBadge}</div>`;
+        <div class="lead-meta">
+          ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
+          ${lead.category ? `<span>${esc(lead.category)}</span><span class="lead-meta-sep">·</span>` : ''}
+          ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
+          ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
+          ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
+        ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
+        ${staffPanel}
+        ${actions}
+      </div>`);
+    });
+  });
 
-    return `<div class="lead-card ${scoreClass} status-${esc(lead.status)}" data-lead-id="${esc(lead.id)}">
-      <div class="lead-card-header">
-        <input type="checkbox" class="lead-checkbox" data-lead-id="${esc(lead.id)}" ${isSelected ? 'checked' : ''}>
-        <div class="lead-title-row">
-          <span class="lead-name">${esc(lead.name)}</span>
-          <span class="score-badge ${scoreClass}">${scoreLabel}</span>
-          ${!lead.hasWebsite ? '<span class="no-website-badge">No Website</span>' : ''}
-        </div>
-      </div>
-      <div class="lead-meta">
-        ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
-        ${lead.category ? `<span>${esc(lead.category)}</span><span class="lead-meta-sep">·</span>` : ''}
-        ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
-        ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
-      </div>
-      ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
-      ${lead.contacts && lead.contacts.length ? `
-        <div class="lead-contacts-panel">
-          <div class="lead-contacts-title">👥 Staff Found (${lead.contacts.length})</div>
-          ${lead.contacts.map(c => `
-            <div class="contact-row">
-              <span class="contact-name">👤 ${esc(c.name)}</span>
-              <span class="contact-title">${esc(c.title || '')}</span>
-              ${c.email ? `<a class="contact-email" href="mailto:${esc(c.email)}">✉️ ${esc(c.email)}</a>` : '<span class="contact-no-data">No email</span>'}
-              ${c.phone ? `<span class="contact-phone">📞 ${esc(c.phone)}</span>` : '<span class="contact-no-data">No phone</span>'}
-            </div>`).join('')}
-        </div>` : ''}
-      ${lead.hasWebsite && (!lead.contacts || !lead.contacts.length) ? `
-        <button class="btn-enrich" data-action="enrich-lead" data-lead-id="${esc(lead.id)}">🔍 Find Pastor/Director</button>` : ''}
-      ${actions}
-    </div>`;
-  }).join('');
+  container.innerHTML = html.join('');
 }
 
 // ── LEAD ACTION HANDLER (event delegation) ───────────────────
@@ -743,31 +852,8 @@ function handleLeadAction(e) {
     skipSingleLead(leadId);
   }
 
-  if (action === 'enrich-lead') {
-    enrichSingleLead(leadId, target);
-  }
-}
-
-async function enrichSingleLead(leadId, btn) {
-  btn.textContent = '⏳ Searching...';
-  btn.disabled = true;
-  try {
-    const res = await fetch('/api/scraper/enrich', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: [leadId] }),
-    });
-    const data = await res.json();
-    const result = data.results?.[0];
-    if (result?.success && result.contacts?.length) {
-      btn.textContent = `✅ Found ${result.contacts.length} contact(s)`;
-      fetchLeads();
-    } else {
-      btn.textContent = '❌ ' + (result?.error || 'No contacts found');
-    }
-  } catch (err) {
-    btn.textContent = '❌ Error';
-    btn.disabled = false;
+  if (action === 'find-staff') {
+    startEnrich(leadId);
   }
 }
 

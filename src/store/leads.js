@@ -47,6 +47,7 @@ async function initTable() {
     // Migrations: add new columns if they don't exist yet
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contacts JSONB DEFAULT '[]'`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "enrichedAt" TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "enrichRunId" TEXT`);
   } finally {
     client.release();
   }
@@ -121,7 +122,7 @@ async function getLeads(filters = {}) {
   const pool = getPool();
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*) FROM leads ${where}`, values),
-    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
+    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts,"enrichRunId","enrichedAt" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
   ]);
 
   return { leads: rowsRes.rows, total: parseInt(countRes.rows[0].count) };

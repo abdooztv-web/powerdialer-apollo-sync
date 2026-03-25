@@ -935,6 +935,161 @@ h1, h2, h3, .display {
   font-weight: 500;
 }
 .lead-state-msg.success { color: var(--success); }
+
+/* ── DATE SEPARATOR ──────────────────────────────────────── */
+.date-separator {
+  display: flex;
+  align-items: center;
+  margin: 18px 0 10px;
+  gap: 10px;
+}
+.date-separator::before,
+.date-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.date-separator-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  padding: 3px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+}
+
+/* ── LEAD NUMBER ─────────────────────────────────────────── */
+.lead-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+/* ── WEBSITE LINK ────────────────────────────────────────── */
+.lead-website-link {
+  color: var(--info);
+  text-decoration: none;
+  font-size: 12px;
+}
+.lead-website-link:hover { text-decoration: underline; }
+
+/* ── STAFF DIRECTORY ─────────────────────────────────────── */
+.staff-directory {
+  margin-left: 22px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.staff-dir-title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 7px 12px;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.staff-count {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--success);
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  border-radius: 20px;
+  padding: 1px 7px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.staff-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.staff-row:last-child { border-bottom: none; }
+.staff-row:hover { background: var(--bg-elevated); }
+
+.staff-num {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 16px;
+  text-align: right;
+}
+
+.staff-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 120px;
+}
+
+.staff-title-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: rgba(99,102,241,0.12);
+  color: var(--accent);
+  border: 1px solid rgba(99,102,241,0.25);
+  white-space: nowrap;
+}
+
+.staff-email {
+  color: var(--info);
+  font-size: 11px;
+}
+
+.staff-phone {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.staff-crawling {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-find-staff {
+  display: inline-block;
+  margin: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: rgba(99,102,241,0.1);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-find-staff:hover { background: rgba(99,102,241,0.2); }
 .lead-state-msg.error   { color: var(--danger); }
 
 /* Leads toolbar */

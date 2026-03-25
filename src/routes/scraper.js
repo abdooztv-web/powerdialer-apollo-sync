@@ -2,12 +2,16 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
+const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
 const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
 
 // Active scrape jobs tracked in memory (runId -> status)
 const activeJobs = new Map();
+
+// Active enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
+const enrichJobs = new Map();
 
 function fallbackScore(lead) {
   let score = 0;
@@ -200,6 +204,83 @@ router.post('/skip', async (req, res) => {
   res.json({ success: true, skipped: ids.length });
 });
 
+// POST /api/scraper/enrich/start
+// Body: { leadId }  — kicks off Apify website-content-crawler for lead's website
+router.post('/enrich/start', async (req, res) => {
+  const { leadId } = req.body;
+  if (!leadId) return res.status(400).json({ success: false, error: 'leadId is required' });
+
+  try {
+    // Look up the lead to get its website
+    const { leads } = await getLeads({});
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
+    if (!lead.website) return res.status(400).json({ success: false, error: 'Lead has no website' });
+
+    if (!process.env.APIFY_API_TOKEN) {
+      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+    }
+
+    const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
+
+    enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId, startedAt: new Date().toISOString() });
+
+    // Persist enrichRunId on the lead record
+    await updateLead(leadId, { enrichRunId });
+
+    logger.info('Enrich crawl started', { enrichRunId, leadId, website: lead.website });
+    res.json({ success: true, enrichRunId, leadId });
+  } catch (err) {
+    logger.error('Failed to start enrich crawl', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/scraper/enrich/status/:enrichRunId
+// Polls Apify; when SUCCEEDED fetches content, sends to Claude, saves contacts on the lead
+router.get('/enrich/status/:enrichRunId', async (req, res) => {
+  const { enrichRunId } = req.params;
+  try {
+    const job = enrichJobs.get(enrichRunId) || {};
+    const apifyStatus = await getEnrichStatus(enrichRunId);
+
+    if (apifyStatus.status === 'SUCCEEDED' && job.status !== 'DONE' && job.status !== 'PROCESSING') {
+      // Mark as processing to prevent duplicate extraction
+      enrichJobs.set(enrichRunId, { ...job, status: 'PROCESSING' });
+
+      // Async: fetch content, extract contacts via Claude, save to lead
+      const leadId = job.leadId;
+      const { leads } = await getLeads({});
+      const lead = leads.find(l => l.id === leadId);
+      const churchName = lead ? lead.name : '';
+
+      extractContactsFromDataset(apifyStatus.datasetId || job.datasetId, churchName)
+        .then(contacts => {
+          updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'DONE', contactCount: contacts.length });
+          logger.info('Enrich complete', { enrichRunId, leadId, contactCount: contacts.length });
+        })
+        .catch(err => {
+          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'ERROR', error: err.message });
+          logger.error('Enrich extraction failed', { enrichRunId, error: err.message });
+        });
+
+      return res.json({ success: true, status: 'PROCESSING', message: 'Extracting contacts with Claude AI…' });
+    }
+
+    const localStatus = job.status || apifyStatus.status;
+    res.json({
+      success: true,
+      status: localStatus,
+      apifyStatus: apifyStatus.status,
+      contactCount: job.contactCount || 0,
+      error: job.error || null,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // GET /api/scraper/export
 router.get('/export', async (req, res) => {
   try {
@@ -229,51 +310,6 @@ router.get('/preview', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
-});
-
-// POST /api/scraper/enrich — scrape website for pastor/director contacts
-router.post('/enrich', async (req, res) => {
-  const { ids = [] } = req.body;
-  if (!ids.length) return res.status(400).json({ success: false, error: 'No lead IDs provided' });
-  if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'ANTHROPIC_API_KEY not set' });
-
-  const { gatherWebsiteContent, extractContacts } = require('../enrichment/websiteEnricher');
-  const { getLeads, updateLead } = require('../store/leads');
-
-  const results = [];
-
-  const { Pool } = require('pg');
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-
-  for (const id of ids) {
-    try {
-      // Look up lead directly by ID
-      const row = await pool.query('SELECT id, name, website FROM leads WHERE id = $1', [id]);
-      const lead = row.rows[0];
-      if (!lead) { results.push({ id, success: false, error: 'Lead not found' }); continue; }
-      if (!lead.website) { results.push({ id, success: false, error: 'No website' }); continue; }
-
-      const content = await gatherWebsiteContent(lead.website);
-      if (!content || content.length < 50) {
-        results.push({ id, success: false, error: 'Could not read website' });
-        continue;
-      }
-
-      const contacts = await extractContacts(content, lead.name, process.env.ANTHROPIC_API_KEY);
-      // Store contacts directly as JSONB (no stringify needed)
-      await pool.query(
-        `UPDATE leads SET contacts = $1, "enrichedAt" = $2 WHERE id = $3`,
-        [JSON.stringify(contacts), new Date().toISOString(), id]
-      );
-      results.push({ id, success: true, contacts });
-    } catch (err) {
-      results.push({ id, success: false, error: err.message });
-    }
-  }
-  await pool.end();
-
-  const enriched = results.filter(r => r.success).length;
-  res.json({ success: true, enriched, failed: results.length - enriched, results });
 });
 
 module.exports = router;
