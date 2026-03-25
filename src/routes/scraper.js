@@ -3,7 +3,7 @@ const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
 const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
-const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId } = require('../store/leads');
+const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
 
@@ -52,8 +52,22 @@ router.get('/status/:runId', async (req, res) => {
     const job = activeJobs.get(runId) || {};
     const apifyStatus = await getJobStatus(runId);
 
-    if (apifyStatus.status === 'SUCCEEDED' && !job.scored) {
-      // Mark scored immediately to prevent double-processing on concurrent polls
+    if (apifyStatus.status === 'SUCCEEDED') {
+      // Check DB first — if this runId already has leads saved, return immediately.
+      // This prevents reprocessing when Vercel spins up a new cold-start instance
+      // and the in-memory activeJobs Map is empty (job.scored is lost).
+      const alreadySaved = await getRunResult(runId);
+      if (alreadySaved > 0) {
+        return res.json({ success: true, status: 'DONE', count: alreadySaved, skipped: 0, total: alreadySaved });
+      }
+
+      // Also skip if already processing in this instance
+      if (job.scored) {
+        const localStatus = job.status || 'PROCESSING';
+        return res.json({ success: true, status: localStatus, count: job.count || 0, skipped: job.skipped || 0 });
+      }
+
+      // Mark scored in memory to prevent concurrent polls in the same instance
       activeJobs.set(runId, { ...job, status: 'PROCESSING', scored: true });
 
       // Synchronous: fetch + score + save within this request (required for Vercel)
@@ -77,7 +91,7 @@ router.get('/status/:runId', async (req, res) => {
           scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
         }
 
-        const { added, skipped } = await saveLeads(scored);
+        const { added, skipped } = await saveLeads(scored, runId);
         activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added, skipped });
         logger.info('Scrape complete', { runId, total: raw.length, added, skipped });
         return res.json({ success: true, status: 'DONE', count: added, skipped, total: raw.length });

@@ -48,6 +48,11 @@ async function initTable() {
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contacts JSONB DEFAULT '[]'`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "enrichedAt" TIMESTAMPTZ`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "enrichRunId" TEXT`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "scrapeRunId" TEXT`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "pushedAt" TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "pushedToSequence" TEXT`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "apolloContactId" TEXT`);
+    await client.query(`CREATE INDEX IF NOT EXISTS leads_scrape_run_idx ON leads("scrapeRunId")`)
   } finally {
     client.release();
   }
@@ -62,7 +67,7 @@ function generateId() {
   return crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString('hex');
 }
 
-async function saveLeads(newLeads) {
+async function saveLeads(newLeads, scrapeRunId = null) {
   await ensureTable();
   const client = await getPool().connect();
   let added = 0;
@@ -71,8 +76,8 @@ async function saveLeads(newLeads) {
     for (const lead of newLeads) {
       const id = lead.id || generateId();
       const res = await client.query(`
-        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", contacts, data)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", contacts, "scrapeRunId", data)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         ON CONFLICT ("placeId") DO NOTHING
         RETURNING id
       `, [
@@ -82,7 +87,8 @@ async function saveLeads(newLeads) {
         lead.reviewCount || 0, lead.rating || null, lead.score || null,
         lead.scoreReason || null, lead.suggestedSequence || null,
         lead.status || 'new', lead.scrapedAt || new Date().toISOString(),
-        JSON.stringify([]), JSON.stringify(lead)
+        JSON.stringify([]), scrapeRunId || lead.scrapeRunId || null,
+        JSON.stringify(lead)
       ]);
       if (res.rowCount > 0) added++;
       else skipped++;
@@ -91,6 +97,16 @@ async function saveLeads(newLeads) {
     client.release();
   }
   return { added, skipped };
+}
+
+// Check if a scrape run was already saved to the DB (prevents reprocessing on Vercel cold starts)
+async function getRunResult(scrapeRunId) {
+  await ensureTable();
+  const res = await getPool().query(
+    `SELECT COUNT(*) as count FROM leads WHERE "scrapeRunId" = $1`,
+    [scrapeRunId]
+  );
+  return parseInt(res.rows[0].count);
 }
 
 async function getLeads(filters = {}) {
@@ -166,4 +182,4 @@ async function exportCSV(filters = {}) {
   return [headers.join(','), ...rows].join('\n');
 }
 
-module.exports = { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId };
+module.exports = { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult };
