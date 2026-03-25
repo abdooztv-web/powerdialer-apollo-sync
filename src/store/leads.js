@@ -28,6 +28,7 @@ async function initTable() {
         "hasWebsite" BOOLEAN DEFAULT false,
         category TEXT,
         address TEXT,
+        contacts JSONB DEFAULT '[]',
         city TEXT,
         state TEXT,
         "reviewCount" INTEGER DEFAULT 0,
@@ -43,6 +44,8 @@ async function initTable() {
       CREATE INDEX IF NOT EXISTS leads_score_idx ON leads(score DESC);
       CREATE INDEX IF NOT EXISTS leads_status_idx ON leads(status);
     `);
+    // Migration: add contacts column if it doesn't exist yet
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contacts JSONB DEFAULT '[]'`);
   } finally {
     client.release();
   }
@@ -61,12 +64,13 @@ async function saveLeads(newLeads) {
   await ensureTable();
   const client = await getPool().connect();
   let added = 0;
+  let skipped = 0;
   try {
     for (const lead of newLeads) {
       const id = lead.id || generateId();
       const res = await client.query(`
-        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", data)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", contacts, data)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
         ON CONFLICT ("placeId") DO NOTHING
         RETURNING id
       `, [
@@ -76,14 +80,15 @@ async function saveLeads(newLeads) {
         lead.reviewCount || 0, lead.rating || null, lead.score || null,
         lead.scoreReason || null, lead.suggestedSequence || null,
         lead.status || 'new', lead.scrapedAt || new Date().toISOString(),
-        JSON.stringify(lead)
+        JSON.stringify([]), JSON.stringify(lead)
       ]);
       if (res.rowCount > 0) added++;
+      else skipped++;
     }
   } finally {
     client.release();
   }
-  return added;
+  return { added, skipped };
 }
 
 async function getLeads(filters = {}) {
@@ -115,7 +120,7 @@ async function getLeads(filters = {}) {
   const pool = getPool();
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*) FROM leads ${where}`, values),
-    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
+    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
   ]);
 
   return { leads: rowsRes.rows, total: parseInt(countRes.rows[0].count) };

@@ -73,10 +73,10 @@ router.get('/status/:runId', async (req, res) => {
           scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
         }
 
-        const added = await saveLeads(scored);
-        activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added });
-        logger.info('Scrape complete', { runId, total: raw.length, added });
-        return res.json({ success: true, status: 'DONE', count: added });
+        const { added, skipped } = await saveLeads(scored);
+        activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added, skipped });
+        logger.info('Scrape complete', { runId, total: raw.length, added, skipped });
+        return res.json({ success: true, status: 'DONE', count: added, skipped, total: raw.length });
       } catch (err) {
         activeJobs.set(runId, { ...job, status: 'ERROR', scored: true, error: err.message });
         logger.error('Post-scrape processing failed', { runId, error: err.message });
@@ -211,6 +211,60 @@ router.get('/export', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// GET /api/scraper/preview — estimate leads before running (checks DB + location)
+router.get('/preview', async (req, res) => {
+  try {
+    const { location = '', searchType = 'orthodox' } = req.query;
+    const { total: existing } = await getLeads({ location });
+    res.json({
+      success: true,
+      existing,
+      location: location || 'United States',
+      searchType,
+      estimate: searchType === 'orthodox' ? '10–60 per city' : '50–200 per city',
+      message: `You already have ${existing} leads${location ? ' in ' + location : ''}. A new scrape will skip duplicates automatically.`
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/scraper/enrich — scrape website for pastor/director contacts
+router.post('/enrich', async (req, res) => {
+  const { ids = [] } = req.body;
+  if (!ids.length) return res.status(400).json({ success: false, error: 'No lead IDs provided' });
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ success: false, error: 'ANTHROPIC_API_KEY not set' });
+
+  const { gatherWebsiteContent, extractContacts } = require('../enrichment/websiteEnricher');
+  const { getLeads, updateLead } = require('../store/leads');
+
+  const results = [];
+
+  for (const id of ids) {
+    try {
+      const { leads } = await getLeads({});
+      const lead = leads.find(l => l.id === id);
+      if (!lead) { results.push({ id, success: false, error: 'Lead not found' }); continue; }
+      if (!lead.website) { results.push({ id, success: false, error: 'No website' }); continue; }
+
+      const content = await gatherWebsiteContent(lead.website);
+      if (!content || content.length < 50) {
+        results.push({ id, success: false, error: 'Could not read website' });
+        continue;
+      }
+
+      const contacts = await extractContacts(content, lead.name, process.env.ANTHROPIC_API_KEY);
+      await updateLead(id, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+      results.push({ id, success: true, contacts });
+    } catch (err) {
+      results.push({ id, success: false, error: err.message });
+    }
+  }
+
+  const enriched = results.filter(r => r.success).length;
+  res.json({ success: true, enriched, failed: results.length - enriched, results });
 });
 
 module.exports = router;

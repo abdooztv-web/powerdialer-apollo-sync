@@ -465,6 +465,7 @@ function initScraper() {
 
   // Run scrape button
   document.getElementById('btnRunScrape').addEventListener('click', runScrape);
+  document.getElementById('btnPreviewScrape').addEventListener('click', previewScrape);
 
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
@@ -508,6 +509,22 @@ function initScraper() {
 }
 
 // ── RUN SCRAPE ───────────────────────────────────────────────
+async function previewScrape() {
+  const location = document.getElementById('scraperLocation').value.trim() || 'United States';
+  const searchType = document.getElementById('scraperSearchType').value;
+  const resultEl = document.getElementById('scrapePreviewResult');
+  resultEl.style.display = '';
+  resultEl.textContent = '⏳ Checking...';
+  try {
+    const res = await fetch(`/api/scraper/preview?location=${encodeURIComponent(location)}&searchType=${encodeURIComponent(searchType)}`);
+    const data = await res.json();
+    if (data.success) resultEl.textContent = data.message + ' Estimated new results: ' + data.estimate + '.';
+    else resultEl.textContent = '❌ ' + data.error;
+  } catch {
+    resultEl.textContent = '❌ Could not load preview';
+  }
+}
+
 async function runScrape() {
   const btn = document.getElementById('btnRunScrape');
   btn.disabled = true;
@@ -558,6 +575,13 @@ async function pollScrapeStatus() {
       scrapeRunId = null;
       hideScrapeProgress();
       document.getElementById('btnRunScrape').disabled = false;
+      const newCount = data.count || 0;
+      const skipCount = data.skipped || 0;
+      const total = data.total || newCount;
+      let msg = `✅ Scrape done! ${newCount} new leads added.`;
+      if (skipCount > 0) msg += ` ${skipCount} duplicates skipped.`;
+      if (total > 0) msg += ` (${total} total from Google Maps)`;
+      alert(msg);
       fetchLeads();
       fetchScraperStats();
     } else if (data.status === 'FAILED' || data.status === 'ABORTED' || data.status === 'ERROR') {
@@ -675,6 +699,17 @@ function renderLeadCards(leads) {
         ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
       </div>
       ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
+      ${lead.contacts && lead.contacts.length ? `
+        <div class="lead-contacts">
+          ${lead.contacts.map(c => `
+            <div class="contact-item">
+              👤 <strong>${esc(c.name)}</strong> — ${esc(c.title || '')}
+              ${c.email ? `<a href="mailto:${esc(c.email)}"> ${esc(c.email)}</a>` : ''}
+              ${c.phone ? `· 📞 ${esc(c.phone)}` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+      ${lead.hasWebsite && (!lead.contacts || !lead.contacts.length) ? `
+        <button class="btn-enrich" data-action="enrich-lead" data-lead-id="${esc(lead.id)}">🔍 Find Pastor/Director</button>` : ''}
       ${actions}
     </div>`;
   }).join('');
@@ -704,6 +739,33 @@ function handleLeadAction(e) {
 
   if (action === 'skip-lead') {
     skipSingleLead(leadId);
+  }
+
+  if (action === 'enrich-lead') {
+    enrichSingleLead(leadId, target);
+  }
+}
+
+async function enrichSingleLead(leadId, btn) {
+  btn.textContent = '⏳ Searching...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/scraper/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [leadId] }),
+    });
+    const data = await res.json();
+    const result = data.results?.[0];
+    if (result?.success && result.contacts?.length) {
+      btn.textContent = `✅ Found ${result.contacts.length} contact(s)`;
+      fetchLeads();
+    } else {
+      btn.textContent = '❌ ' + (result?.error || 'No contacts found');
+    }
+  } catch (err) {
+    btn.textContent = '❌ Error';
+    btn.disabled = false;
   }
 }
 
