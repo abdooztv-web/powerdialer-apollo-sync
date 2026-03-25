@@ -578,6 +578,14 @@ h1, h2, h3, .display {
   margin-bottom: 16px;
 }
 
+#page-scraper {
+  max-width: 960px;
+}
+
+#leadsList {
+  max-width: 860px;
+}
+
 .scraper-config {
   background: var(--surface-card);
   border-radius: var(--radius);
@@ -798,8 +806,8 @@ h1, h2, h3, .display {
 .lead-card.score-high { border-left-color: var(--success); }
 .lead-card.score-mid  { border-left-color: var(--warning); }
 .lead-card.score-low  { border-left-color: var(--danger); }
-.lead-card.status-pushed  { opacity: 0.65; }
-.lead-card.status-skipped { opacity: 0.5; }
+.lead-card.status-pushed  { border-left-color: var(--success); }
+.lead-card.status-skipped { border-left-color: var(--surface-high); }
 
 .lead-card-header {
   display: flex;
