@@ -28,10 +28,9 @@ async function startEnrichCrawl(website) {
 
   const input = {
     startUrls,
-    maxCrawlPages: 12,
-    maxCrawlDepth: 0,        // 0 = only crawl the exact URLs given, no link following
-    crawlerType: 'cheerio',
-    htmlTransformer: 'markdown', // markdown preserves mailto:/tel: links so emails/phones survive
+    maxCrawledPagesPerCrawl: 12, // correct field name for website-content-crawler
+    crawlerType: 'cheerio',      // lightweight, fastest, no browser needed
+    htmlTransformer: 'readableText', // 'markdown' is Playwright-only; readableText works with cheerio
   };
 
   const res = await axios.post(
@@ -73,16 +72,17 @@ async function extractContactsFromDataset(datasetId, churchName) {
   const pages = res.data || [];
   if (!pages.length) return [];
 
-  // Combine page content — prefer markdown (preserves mailto:/tel: links)
-  // then fall back to plain text or raw html
+  // Combine page content — readableText comes back as p.text
+  // fall back to markdown, then raw html
   const combinedText = pages
     .map(p => {
       const url = p.url || p.loadedUrl || '';
-      const content = p.markdown || p.text || p.html || '';
-      return `URL: ${url}\n${content}`;
+      const content = p.text || p.markdown || p.html || '';
+      // strip very long blocks of whitespace/noise
+      return `URL: ${url}\n${content.replace(/\s{4,}/g, '\n')}`;
     })
     .join('\n\n---\n\n')
-    .slice(0, 14000); // slightly larger cap since markdown is more compact
+    .slice(0, 14000);
 
   return callClaudeForContacts(combinedText, churchName);
 }
