@@ -44,8 +44,9 @@ async function initTable() {
       CREATE INDEX IF NOT EXISTS leads_score_idx ON leads(score DESC);
       CREATE INDEX IF NOT EXISTS leads_status_idx ON leads(status);
     `);
-    // Migration: add contacts column if it doesn't exist yet
+    // Migrations: add new columns if they don't exist yet
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS contacts JSONB DEFAULT '[]'`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "enrichedAt" TIMESTAMPTZ`);
   } finally {
     client.release();
   }
