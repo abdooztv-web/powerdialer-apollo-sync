@@ -438,6 +438,8 @@ let scrapePollTimer = null;
 let selectedLeadIds = new Set();
 let currentLeadFilters = {};
 let currentLeads = []; // all leads currently loaded in the browser
+let currentPage = 1;
+const PAGE_SIZE = 25;
 
 // enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
 const enrichPollers = new Map();
@@ -679,7 +681,8 @@ async function fetchLeads() {
     const data = await res.json();
     if (data.success) {
       currentLeads = data.leads;
-      renderLeadCards(data.leads, data.total);
+      currentPage = 1;
+      renderLeadCards(currentLeads);
     }
   } catch { /* silent */ }
 }
@@ -764,9 +767,15 @@ function renderLeadCards(leads) {
     return;
   }
 
-  // Group by date
-  const groups = groupByDate(leads);
-  let globalIndex = 0;
+  // Paginate
+  const totalLeads = leads.length;
+  const totalPages = Math.ceil(totalLeads / PAGE_SIZE);
+  if (currentPage > totalPages) currentPage = Math.max(1, totalPages);
+  const pageLeads = leads.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  // Group the current page's leads by date
+  const groups = groupByDate(pageLeads);
+  let globalIndex = (currentPage - 1) * PAGE_SIZE;
   const html = [];
 
   Object.entries(groups).forEach(([date, groupLeads]) => {
@@ -816,6 +825,7 @@ function renderLeadCards(leads) {
           ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
           ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
           ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
+        </div>
         ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
         ${staffPanel}
         ${actions}
@@ -823,7 +833,39 @@ function renderLeadCards(leads) {
     });
   });
 
-  container.innerHTML = html.join('');
+  container.innerHTML = html.join('') + renderPagination(totalLeads, currentPage);
+}
+
+// ── PAGINATION ────────────────────────────────────────────────
+function renderPagination(total, currentPg) {
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  if (totalPages <= 1) return '';
+
+  const pages = [];
+  for (let i = 1; i <= totalPages; i++) {
+    const isActive = i === currentPg;
+    const isNear = Math.abs(i - currentPg) <= 2 || i === 1 || i === totalPages;
+    if (isNear) {
+      pages.push(`<button class="pg-btn ${isActive ? 'pg-btn--active' : ''}" onclick="goToPage(${i})">${i}</button>`);
+    } else if (pages[pages.length - 1] !== '...') {
+      pages.push(`<span class="pg-ellipsis">…</span>`);
+    }
+  }
+
+  return `<div class="pagination-bar">
+    <button class="pg-btn pg-btn--nav" onclick="goToPage(${currentPg - 1})" ${currentPg === 1 ? 'disabled' : ''}>← Prev</button>
+    ${pages.join('')}
+    <button class="pg-btn pg-btn--nav" onclick="goToPage(${currentPg + 1})" ${currentPg === totalPages ? 'disabled' : ''}>Next →</button>
+    <span class="pg-info">Page ${currentPg} of ${totalPages} · ${total} leads total</span>
+  </div>`;
+}
+
+function goToPage(page) {
+  const totalPages = Math.ceil(currentLeads.length / PAGE_SIZE);
+  if (page < 1 || page > totalPages) return;
+  currentPage = page;
+  renderLeadCards(currentLeads);
+  document.getElementById('leadsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ── LEAD ACTION HANDLER (event delegation) ───────────────────
