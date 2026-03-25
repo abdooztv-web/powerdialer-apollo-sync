@@ -13,16 +13,25 @@ function apifyHeaders() {
  * Start an Apify website-content-crawler run for a given URL.
  * Returns { enrichRunId, datasetId }
  */
+// Pages most likely to contain pastor/staff contact info
+const STAFF_PATHS = [
+  '', '/staff', '/about', '/leadership', '/contact', '/our-team',
+  '/team', '/clergy', '/pastor', '/ministers', '/meet-the-staff', '/about-us',
+];
+
 async function startEnrichCrawl(website) {
   const token = process.env.APIFY_API_TOKEN;
   if (!token) throw new Error('APIFY_API_TOKEN is not set');
 
+  const base = website.replace(/\/+$/, '');
+  const startUrls = STAFF_PATHS.map(path => ({ url: base + path }));
+
   const input = {
-    startUrls: [{ url: website }],
-    maxCrawlPages: 6,
-    maxCrawlDepth: 1,
+    startUrls,
+    maxCrawlPages: 12,
+    maxCrawlDepth: 0,        // 0 = only crawl the exact URLs given, no link following
     crawlerType: 'cheerio',
-    htmlTransformer: 'readableText',
+    htmlTransformer: 'markdown', // markdown preserves mailto:/tel: links so emails/phones survive
   };
 
   const res = await axios.post(
@@ -64,15 +73,16 @@ async function extractContactsFromDataset(datasetId, churchName) {
   const pages = res.data || [];
   if (!pages.length) return [];
 
-  // Combine page text from all crawled pages
+  // Combine page content — prefer markdown (preserves mailto:/tel: links)
+  // then fall back to plain text or raw html
   const combinedText = pages
     .map(p => {
       const url = p.url || p.loadedUrl || '';
-      const text = p.text || p.markdown || p.html || '';
-      return `URL: ${url}\n${text}`;
+      const content = p.markdown || p.text || p.html || '';
+      return `URL: ${url}\n${content}`;
     })
     .join('\n\n---\n\n')
-    .slice(0, 12000); // cap to stay within token limits
+    .slice(0, 14000); // slightly larger cap since markdown is more compact
 
   return callClaudeForContacts(combinedText, churchName);
 }
