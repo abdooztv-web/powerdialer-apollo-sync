@@ -1,89 +1,124 @@
 const axios = require('axios');
+const https = require('https');
 
-const APIFY_BASE = 'https://api.apify.com/v2';
-const WEBSITE_CRAWLER_ACTOR = 'apify~website-content-crawler';
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 const MODEL = 'claude-haiku-4-5-20251001';
 
-function apifyHeaders() {
-  return { Authorization: `Bearer ${process.env.APIFY_API_TOKEN}` };
-}
-
-/**
- * Start an Apify website-content-crawler run for a given URL.
- * Returns { enrichRunId, datasetId }
- */
-// Pages most likely to contain pastor/staff contact info
+// Pages most likely to have pastor/staff contact info
 const STAFF_PATHS = [
-  '', '/staff', '/about', '/leadership', '/contact', '/our-team',
-  '/team', '/clergy', '/pastor', '/ministers', '/meet-the-staff', '/about-us',
+  '/staff',
+  '/about',
+  '/leadership',
+  '/clergy',
+  '/contact',
+  '/our-team',
+  '/team',
+  '/pastor',
+  '/ministers',
+  '/meet-the-staff',
+  '/about-us',
+  '/',
 ];
 
-async function startEnrichCrawl(website) {
-  const token = process.env.APIFY_API_TOKEN;
-  if (!token) throw new Error('APIFY_API_TOKEN is not set');
+// Shared axios instance: bypass SSL cert issues on old church websites
+const httpClient = axios.create({
+  httpsAgent: new https.Agent({ rejectUnauthorized: false }),
+  timeout: 8000,
+  headers: {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+  },
+});
 
-  const base = website.replace(/\/+$/, '');
-  const startUrls = STAFF_PATHS.map(path => ({ url: base + path }));
+/**
+ * Strip HTML tags and collapse whitespace to get readable plain text.
+ * Also extracts mailto: and tel: links before stripping.
+ */
+function htmlToText(html) {
+  if (!html) return '';
 
-  const input = {
-    startUrls,
-    maxCrawledPagesPerCrawl: 12, // correct field name for website-content-crawler
-    crawlerType: 'cheerio',      // lightweight, fastest, no browser needed
-    htmlTransformer: 'readableText', // 'markdown' is Playwright-only; readableText works with cheerio
-  };
+  // Pull out email addresses from mailto: links before stripping
+  const emails = [];
+  html.replace(/href=["']mailto:([^"']+)["']/gi, (_, e) => emails.push(e));
 
-  const res = await axios.post(
-    `${APIFY_BASE}/acts/${WEBSITE_CRAWLER_ACTOR}/runs`,
-    input,
-    { headers: { ...apifyHeaders(), 'Content-Type': 'application/json' } }
+  // Pull out phone numbers from tel: links
+  const phones = [];
+  html.replace(/href=["']tel:([^"']+)["']/gi, (_, p) => phones.push(p));
+
+  // Remove script/style blocks entirely
+  let text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<header[\s\S]*?<\/header>/gi, ' ');
+
+  // Replace block tags with newlines
+  text = text.replace(/<\/?(p|div|li|h[1-6]|br|tr|td|th)[^>]*>/gi, '\n');
+
+  // Strip all remaining tags
+  text = text.replace(/<[^>]+>/g, ' ');
+
+  // Decode common HTML entities
+  text = text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#\d+;/g, ' ')
+    .replace(/&[a-z]+;/g, ' ');
+
+  // Collapse whitespace
+  text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+
+  // Append found emails/phones so Claude can see them
+  if (emails.length) text += '\n\nEmails found: ' + emails.join(', ');
+  if (phones.length) text += '\nPhones found: ' + phones.join(', ');
+
+  return text;
+}
+
+/**
+ * Fetch one page. Returns plain text or '' on failure.
+ */
+async function fetchPage(url) {
+  try {
+    const res = await httpClient.get(url);
+    const ct = (res.headers['content-type'] || '').toLowerCase();
+    if (!ct.includes('html')) return '';
+    return htmlToText(res.data || '');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Scrape a church website and extract staff contacts using Claude.
+ * Returns array of { name, title, email, phone }
+ * This is synchronous — no Apify, no polling needed.
+ */
+async function enrichWebsite(website, churchName) {
+  const base = (website || '').replace(/\/+$/, '');
+  if (!base) return [];
+
+  // Fetch all staff pages in parallel
+  const results = await Promise.allSettled(
+    STAFF_PATHS.map(path => fetchPage(base + path))
   );
 
-  const run = res.data.data;
-  return { enrichRunId: run.id, datasetId: run.defaultDatasetId };
-}
-
-/**
- * Check the status of an Apify run.
- * Returns { status, datasetId, itemCount }
- */
-async function getEnrichStatus(enrichRunId) {
-  const res = await axios.get(`${APIFY_BASE}/actor-runs/${enrichRunId}`, {
-    headers: apifyHeaders(),
-  });
-  const run = res.data.data;
-  return {
-    status: run.status,
-    datasetId: run.defaultDatasetId,
-    itemCount: run.stats?.itemCount || 0,
-  };
-}
-
-/**
- * Fetch crawled page content from Apify dataset and extract contacts via Claude.
- * Returns array of contact objects: { name, title, email, phone }
- */
-async function extractContactsFromDataset(datasetId, churchName) {
-  const res = await axios.get(`${APIFY_BASE}/datasets/${datasetId}/items`, {
-    headers: apifyHeaders(),
-    params: { format: 'json', clean: true, limit: 50 },
+  // Combine non-empty page texts, label with their path
+  const chunks = [];
+  results.forEach((r, i) => {
+    const text = r.status === 'fulfilled' ? r.value : '';
+    if (text && text.length > 80) {
+      chunks.push(`--- ${STAFF_PATHS[i] || '/'} ---\n${text.slice(0, 1200)}`);
+    }
   });
 
-  const pages = res.data || [];
-  if (!pages.length) return [];
+  if (!chunks.length) return [];
 
-  // Combine page content — readableText comes back as p.text
-  // fall back to markdown, then raw html
-  const combinedText = pages
-    .map(p => {
-      const url = p.url || p.loadedUrl || '';
-      const content = p.text || p.markdown || p.html || '';
-      // strip very long blocks of whitespace/noise
-      return `URL: ${url}\n${content.replace(/\s{4,}/g, '\n')}`;
-    })
-    .join('\n\n---\n\n')
-    .slice(0, 14000);
-
+  const combinedText = chunks.join('\n\n').slice(0, 14000);
   return callClaudeForContacts(combinedText, churchName);
 }
 
@@ -98,14 +133,14 @@ Church: ${churchName || 'Unknown Church'}
 Website content:
 ${pageText}
 
-Extract all staff members / church leaders you can find (pastor, reverend, elder, deacon, administrator, director, minister, priest, secretary, etc.).
+Extract all staff members / church leaders you can find (pastor, reverend, father, elder, deacon, administrator, director, minister, priest, secretary, etc.).
 
-Return ONLY valid JSON array, no other text:
+Return ONLY a valid JSON array, no other text:
 [{"name": "...", "title": "...", "email": "...", "phone": "..."}]
 
 Rules:
 - Use null for missing fields, not empty strings
-- Only include real people, not departments
+- Only include real people, not departments or generic roles
 - If no contacts found, return []`;
 
   try {
@@ -126,14 +161,13 @@ Rules:
     );
 
     const text = res.data.content[0].text.trim();
-    // Extract JSON array even if wrapped in markdown
     const match = text.match(/\[[\s\S]*\]/);
     if (!match) return [];
     const parsed = JSON.parse(match[0]);
     return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
+  } catch {
     return [];
   }
 }
 
-module.exports = { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset };
+module.exports = { enrichWebsite };

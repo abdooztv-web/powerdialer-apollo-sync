@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
-const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
+const { enrichWebsite } = require('../enrichment/websiteEnricher');
 const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
@@ -10,8 +10,6 @@ const logger = require('../utils/logger');
 // Active scrape jobs tracked in memory (runId -> status)
 const activeJobs = new Map();
 
-// Active enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
-const enrichJobs = new Map();
 
 function fallbackScore(lead) {
   let score = 0;
@@ -219,80 +217,39 @@ router.post('/skip', async (req, res) => {
 });
 
 // POST /api/scraper/enrich/start
-// Body: { leadId }  — kicks off Apify website-content-crawler for lead's website
+// Body: { leadId }
+// Directly fetches the church website pages and extracts contacts via Claude.
+// No Apify needed — returns contacts synchronously and immediately marks status DONE.
 router.post('/enrich/start', async (req, res) => {
   const { leadId } = req.body;
   if (!leadId) return res.status(400).json({ success: false, error: 'leadId is required' });
 
   try {
-    // Look up the lead to get its website
-    const { leads } = await getLeads({});
+    const { leads } = await getLeads({ limit: 5000 });
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (!lead.website) return res.status(400).json({ success: false, error: 'Lead has no website' });
 
-    if (!process.env.APIFY_API_TOKEN) {
-      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
-    }
+    logger.info('Enriching website directly', { leadId, website: lead.website });
 
-    const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
+    const contacts = await enrichWebsite(lead.website, lead.name);
 
-    enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId, startedAt: new Date().toISOString() });
+    await updateLead(leadId, {
+      contacts: JSON.stringify(contacts),
+      enrichedAt: new Date().toISOString(),
+    });
 
-    // Persist enrichRunId on the lead record
-    await updateLead(leadId, { enrichRunId });
-
-    logger.info('Enrich crawl started', { enrichRunId, leadId, website: lead.website });
-    res.json({ success: true, enrichRunId, leadId });
+    logger.info('Enrich complete', { leadId, contactCount: contacts.length });
+    res.json({ success: true, status: 'DONE', contacts, contactCount: contacts.length });
   } catch (err) {
-    logger.error('Failed to start enrich crawl', { error: err.message });
+    logger.error('Enrich failed', { error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// GET /api/scraper/enrich/status/:enrichRunId
-// Polls Apify; when SUCCEEDED fetches content, sends to Claude, saves contacts on the lead
+// GET /api/scraper/enrich/status/:enrichRunId  (kept for backward compatibility — not used anymore)
 router.get('/enrich/status/:enrichRunId', async (req, res) => {
-  const { enrichRunId } = req.params;
-  try {
-    const job = enrichJobs.get(enrichRunId) || {};
-    const apifyStatus = await getEnrichStatus(enrichRunId);
-
-    if (apifyStatus.status === 'SUCCEEDED' && job.status !== 'DONE' && job.status !== 'PROCESSING') {
-      // Mark as processing to prevent duplicate extraction
-      enrichJobs.set(enrichRunId, { ...job, status: 'PROCESSING' });
-
-      // Async: fetch content, extract contacts via Claude, save to lead
-      const leadId = job.leadId;
-      const { leads } = await getLeads({});
-      const lead = leads.find(l => l.id === leadId);
-      const churchName = lead ? lead.name : '';
-
-      extractContactsFromDataset(apifyStatus.datasetId || job.datasetId, churchName)
-        .then(contacts => {
-          updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
-          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'DONE', contactCount: contacts.length });
-          logger.info('Enrich complete', { enrichRunId, leadId, contactCount: contacts.length });
-        })
-        .catch(err => {
-          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'ERROR', error: err.message });
-          logger.error('Enrich extraction failed', { enrichRunId, error: err.message });
-        });
-
-      return res.json({ success: true, status: 'PROCESSING', message: 'Extracting contacts with Claude AI…' });
-    }
-
-    const localStatus = job.status || apifyStatus.status;
-    res.json({
-      success: true,
-      status: localStatus,
-      apifyStatus: apifyStatus.status,
-      contactCount: job.contactCount || 0,
-      error: job.error || null,
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  res.json({ success: true, status: 'DONE', contactCount: 0 });
 });
 
 // GET /api/scraper/export

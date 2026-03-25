@@ -444,8 +444,12 @@ const PAGE_SIZE = 25;
 // enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
 const enrichPollers = new Map();
 
-// ── ENRICH: WEBSITE CRAWLER POLLING ──────────────────────────
+// ── ENRICH: DIRECT WEBSITE FETCH (no Apify, synchronous) ─────
 async function startEnrich(leadId) {
+  // Mark as crawling in the UI immediately
+  enrichPollers.set(leadId, { enrichRunId: 'pending', intervalId: null });
+  renderLeadCards(currentLeads);
+
   try {
     const res = await fetch('/api/scraper/enrich/start', {
       method: 'POST',
@@ -453,43 +457,20 @@ async function startEnrich(leadId) {
       body: JSON.stringify({ leadId }),
     });
     const data = await res.json();
+
+    enrichPollers.delete(leadId);
+
     if (!data.success) {
       alert('Enrich failed: ' + data.error);
       return;
     }
 
-    const enrichRunId = data.enrichRunId;
-    const intervalId = setInterval(() => pollEnrichStatus(leadId, enrichRunId), 3000);
-    enrichPollers.set(leadId, { enrichRunId, intervalId });
-
-    // Re-render to show "Crawling…" state
+    // Backend is synchronous now — contacts come back immediately
     fetchLeads();
+    fetchScraperStats();
   } catch (err) {
+    enrichPollers.delete(leadId);
     alert('Enrich error: ' + err.message);
-  }
-}
-
-async function pollEnrichStatus(leadId, enrichRunId) {
-  try {
-    const res = await fetch('/api/scraper/enrich/status/' + enrichRunId);
-    const data = await res.json();
-
-    if (data.status === 'DONE') {
-      const poller = enrichPollers.get(leadId);
-      if (poller) clearInterval(poller.intervalId);
-      enrichPollers.delete(leadId);
-      // Re-render leads to show staff directory
-      fetchLeads();
-      fetchScraperStats();
-    } else if (data.status === 'FAILED' || data.status === 'ABORTED' || data.status === 'ERROR') {
-      const poller = enrichPollers.get(leadId);
-      if (poller) clearInterval(poller.intervalId);
-      enrichPollers.delete(leadId);
-      fetchLeads();
-    }
-    // RUNNING / PROCESSING — keep polling
-  } catch {
-    // network hiccup, keep polling
   }
 }
 
