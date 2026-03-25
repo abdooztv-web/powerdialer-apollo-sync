@@ -61,8 +61,13 @@ async function scoreSingle(lead, apiKey) {
       }
     );
 
-    const text = res.data.content[0].text.trim();
-    const parsed = JSON.parse(text);
+    let text = res.data.content[0].text.trim();
+    // Strip markdown code blocks if present
+    text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    // Extract first JSON object if there's extra text
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON found in response');
+    const parsed = JSON.parse(jsonMatch[0]);
 
     return {
       ...lead,

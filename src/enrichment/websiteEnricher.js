@@ -5,9 +5,15 @@ const PAGES_TO_TRY = ['', '/staff', '/about', '/leadership', '/clergy', '/contac
 async function fetchPage(url) {
   try {
     const res = await axios.get(url, {
-      timeout: 8000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ChurchResearch/1.0)' },
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
       maxContentLength: 300000,
+      httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+      maxRedirects: 5,
     });
     return res.data;
   } catch {
@@ -61,8 +67,10 @@ If no contacts found return: []`;
     { headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
   );
 
-  const text = res.data.content[0].text.trim();
-  // Extract JSON array even if wrapped in markdown
+  let text = res.data.content[0].text.trim();
+  // Strip markdown code blocks
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  // Extract JSON array
   const match = text.match(/\[[\s\S]*\]/);
   return match ? JSON.parse(match[0]) : [];
 }
