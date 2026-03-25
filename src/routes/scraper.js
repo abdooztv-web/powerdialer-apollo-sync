@@ -242,10 +242,14 @@ router.post('/enrich', async (req, res) => {
 
   const results = [];
 
+  const { Pool } = require('pg');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+
   for (const id of ids) {
     try {
-      const { leads } = await getLeads({});
-      const lead = leads.find(l => l.id === id);
+      // Look up lead directly by ID
+      const row = await pool.query('SELECT id, name, website FROM leads WHERE id = $1', [id]);
+      const lead = row.rows[0];
       if (!lead) { results.push({ id, success: false, error: 'Lead not found' }); continue; }
       if (!lead.website) { results.push({ id, success: false, error: 'No website' }); continue; }
 
@@ -256,12 +260,17 @@ router.post('/enrich', async (req, res) => {
       }
 
       const contacts = await extractContacts(content, lead.name, process.env.ANTHROPIC_API_KEY);
-      await updateLead(id, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+      // Store contacts directly as JSONB (no stringify needed)
+      await pool.query(
+        `UPDATE leads SET contacts = $1, "enrichedAt" = $2 WHERE id = $3`,
+        [JSON.stringify(contacts), new Date().toISOString(), id]
+      );
       results.push({ id, success: true, contacts });
     } catch (err) {
       results.push({ id, success: false, error: err.message });
     }
   }
+  await pool.end();
 
   const enriched = results.filter(r => r.success).length;
   res.json({ success: true, enriched, failed: results.length - enriched, results });

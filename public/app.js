@@ -700,12 +700,14 @@ function renderLeadCards(leads) {
       </div>
       ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
       ${lead.contacts && lead.contacts.length ? `
-        <div class="lead-contacts">
+        <div class="lead-contacts-panel">
+          <div class="lead-contacts-title">👥 Staff Found (${lead.contacts.length})</div>
           ${lead.contacts.map(c => `
-            <div class="contact-item">
-              👤 <strong>${esc(c.name)}</strong> — ${esc(c.title || '')}
-              ${c.email ? `<a href="mailto:${esc(c.email)}"> ${esc(c.email)}</a>` : ''}
-              ${c.phone ? `· 📞 ${esc(c.phone)}` : ''}
+            <div class="contact-row">
+              <span class="contact-name">👤 ${esc(c.name)}</span>
+              <span class="contact-title">${esc(c.title || '')}</span>
+              ${c.email ? `<a class="contact-email" href="mailto:${esc(c.email)}">✉️ ${esc(c.email)}</a>` : '<span class="contact-no-data">No email</span>'}
+              ${c.phone ? `<span class="contact-phone">📞 ${esc(c.phone)}</span>` : '<span class="contact-no-data">No phone</span>'}
             </div>`).join('')}
         </div>` : ''}
       ${lead.hasWebsite && (!lead.contacts || !lead.contacts.length) ? `
