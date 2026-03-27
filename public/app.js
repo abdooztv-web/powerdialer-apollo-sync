@@ -493,7 +493,7 @@ function renderListsNav() {
   nav.innerHTML = SCRAPER_LISTS.map(list => {
     const count = currentLeads.filter(list.filter).length;
     return `<button class="list-nav-item ${activeListId === list.id ? 'active' : ''}"
-      onclick="setActiveList('${list.id}')">
+      data-list-id="${list.id}">
       <span class="list-dot" style="background:${list.color}"></span>
       <span class="list-item-name">${list.name}</span>
       <span class="list-item-count">${count}</span>
@@ -644,6 +644,12 @@ function initScraper() {
   // Bulk enrich
   document.getElementById('btnBulkEnrich').addEventListener('click', runBulkEnrich);
   document.getElementById('btnBulkCancel').addEventListener('click', () => { bulkEnrichCancelled = true; });
+
+  // Sidebar list switching — event delegation on the nav container
+  document.getElementById('listsNav').addEventListener('click', function(e) {
+    const btn = e.target.closest('[data-list-id]');
+    if (btn) setActiveList(btn.dataset.listId);
+  });
 
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
