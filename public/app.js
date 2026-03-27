@@ -57,6 +57,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'analytics') fetchAnalytics();
+    // Show/hide sidebar lists section
+    const sidebarLists = document.getElementById('sidebarLists');
+    if (sidebarLists) {
+      sidebarLists.style.display = btn.dataset.tab === 'scraper' ? 'block' : 'none';
+    }
   });
 });
 
@@ -444,6 +449,140 @@ const PAGE_SIZE = 25;
 // enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
 const enrichPollers = new Map();
 
+// ── LISTS ────────────────────────────────────────────────────
+const SCRAPER_LISTS = [
+  {
+    id: 'no-website',
+    name: 'No Website',
+    color: '#ea580c',
+    icon: '📵',
+    filter: lead => !lead.hasWebsite,
+    description: 'Call-first leads — no website found',
+  },
+  {
+    id: 'has-website',
+    name: 'Has Website',
+    color: '#0053db',
+    icon: '🌐',
+    filter: lead => !!lead.hasWebsite,
+    description: 'Email-first leads — website found',
+  },
+  {
+    id: 'decision-makers',
+    name: 'Decision Makers',
+    color: '#16a34a',
+    icon: '👤',
+    filter: lead => {
+      const c = lead.contacts;
+      if (!c) return false;
+      if (Array.isArray(c)) return c.length > 0;
+      if (typeof c === 'string') { try { return JSON.parse(c).length > 0; } catch { return false; } }
+      return false;
+    },
+    description: 'Pastor name + contact info extracted',
+  },
+];
+
+let activeListId = 'no-website';
+let bulkEnrichRunning = false;
+let bulkEnrichCancelled = false;
+
+function renderListsNav() {
+  const nav = document.getElementById('listsNav');
+  if (!nav) return;
+  nav.innerHTML = SCRAPER_LISTS.map(list => {
+    const count = currentLeads.filter(list.filter).length;
+    return `<button class="list-nav-item ${activeListId === list.id ? 'active' : ''}"
+      onclick="setActiveList('${list.id}')">
+      <span class="list-dot" style="background:${list.color}"></span>
+      <span class="list-item-name">${list.name}</span>
+      <span class="list-item-count">${count}</span>
+    </button>`;
+  }).join('');
+}
+
+function setActiveList(id) {
+  activeListId = id;
+  currentPage = 1;
+  selectedLeadIds.clear();
+  renderListsNav();
+  const list = SCRAPER_LISTS.find(l => l.id === id);
+  const titleEl = document.getElementById('scraperListTitle');
+  if (titleEl && list) titleEl.textContent = list.icon + ' ' + list.name;
+  renderActiveList();
+}
+
+function getActiveListLeads() {
+  const list = SCRAPER_LISTS.find(l => l.id === activeListId);
+  return list ? currentLeads.filter(list.filter) : currentLeads;
+}
+
+function renderActiveList() {
+  const leads = getActiveListLeads();
+  const list = SCRAPER_LISTS.find(l => l.id === activeListId);
+
+  // Update subtitle
+  const subEl = document.getElementById('scraperListSub');
+  if (subEl && list) subEl.textContent = list.description + ' · ' + leads.length + ' leads';
+
+  // Show/hide bulk enrich bar
+  const bulkEnrichBar = document.getElementById('bulkEnrichBar');
+  if (bulkEnrichBar) bulkEnrichBar.style.display = activeListId === 'has-website' ? 'flex' : 'none';
+
+  // Show/hide scrape config (hide on decision-makers)
+  const configCard = document.querySelector('.scraper-config');
+  if (configCard) configCard.style.display = activeListId === 'decision-makers' ? 'none' : '';
+
+  renderLeadCards(leads);
+  updateBulkBar();
+}
+
+async function runBulkEnrich() {
+  if (bulkEnrichRunning) return;
+  const toEnrich = currentLeads.filter(
+    l => l.hasWebsite && l.website && (!l.contacts || (Array.isArray(l.contacts) ? l.contacts.length === 0 : l.contacts === '[]' || l.contacts === 'null'))
+  );
+  if (!toEnrich.length) {
+    alert('All website leads already have staff data, or no website leads found.');
+    return;
+  }
+  bulkEnrichRunning = true;
+  bulkEnrichCancelled = false;
+  const btn = document.getElementById('btnBulkEnrich');
+  const cancelBtn = document.getElementById('btnBulkCancel');
+  const sub = document.getElementById('bulkEnrichSub');
+  btn.disabled = true;
+  btn.textContent = `⏳ Running… 0 / ${toEnrich.length}`;
+  if (cancelBtn) cancelBtn.style.display = '';
+  let done = 0; let found = 0;
+  for (const lead of toEnrich) {
+    if (bulkEnrichCancelled) break;
+    try {
+      const res = await fetch('/api/scraper/enrich/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id }),
+      });
+      const data = await res.json();
+      if (data.success && data.contactCount > 0) found++;
+    } catch { /* continue */ }
+    done++;
+    btn.textContent = `⏳ ${done} / ${toEnrich.length} done`;
+    if (sub) sub.textContent = `${done} churches searched · ${found} pastors found so far…`;
+    if (!bulkEnrichCancelled) await new Promise(r => setTimeout(r, 1500));
+  }
+  bulkEnrichRunning = false;
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  btn.disabled = false;
+  btn.textContent = '▶ Find Staff for All';
+  if (sub) sub.textContent = 'Visits each church website and extracts pastor name, title, phone, and email automatically.';
+  await fetchLeads();
+  fetchScraperStats();
+  const doneMsg = bulkEnrichCancelled
+    ? `Cancelled. Processed ${done} of ${toEnrich.length} churches. Found staff at ${found}.`
+    : `Done! Searched ${done} churches. Found staff at ${found}. Check the Decision Makers list.`;
+  alert(doneMsg);
+}
+
 // ── ENRICH: DIRECT WEBSITE FETCH (no Apify, synchronous) ─────
 async function startEnrich(leadId) {
   // Mark as crawling in the UI immediately
@@ -501,6 +640,10 @@ function initScraper() {
   // Run scrape button
   document.getElementById('btnRunScrape').addEventListener('click', runScrape);
   document.getElementById('btnPreviewScrape').addEventListener('click', previewScrape);
+
+  // Bulk enrich
+  document.getElementById('btnBulkEnrich').addEventListener('click', runBulkEnrich);
+  document.getElementById('btnBulkCancel').addEventListener('click', () => { bulkEnrichCancelled = true; });
 
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
@@ -663,7 +806,8 @@ async function fetchLeads() {
     if (data.success) {
       currentLeads = data.leads;
       currentPage = 1;
-      renderLeadCards(currentLeads);
+      renderListsNav();
+      renderActiveList();
     }
   } catch { /* silent */ }
 }
@@ -681,6 +825,7 @@ async function fetchScraperStats() {
       const badge = document.getElementById('scraperBadge');
       if (s.new > 0) { badge.textContent = s.new; badge.style.display = ''; }
       else badge.style.display = 'none';
+      renderListsNav();
     }
   } catch { /* silent */ }
 }
@@ -775,6 +920,35 @@ function renderLeadCards(leads) {
         : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
         : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
 
+      // Staff panel — DM mode shows dm-contact-rows; others use staff directory
+      let staffPanel;
+      if (activeListId === 'decision-makers') {
+        let contacts = lead.contacts || [];
+        if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
+        staffPanel = contacts.map(c => `
+          <div class="dm-contact-row">
+            <span class="dm-contact-name">${esc(c.name || '—')}</span>
+            ${c.title ? `<span class="dm-contact-title">${esc(c.title)}</span>` : ''}
+            ${c.phone ? `<a href="tel:${esc(c.phone)}" class="dm-contact-phone">📞 ${esc(c.phone)}</a>` : ''}
+            ${c.email ? `<a href="mailto:${esc(c.email)}" class="dm-contact-email">✉ ${esc(c.email)}</a>` : ''}
+          </div>`).join('');
+      } else {
+        staffPanel = renderStaffDirectory(lead);
+      }
+
+      // "Mark as Decision Maker" button for has-website leads with no contacts yet
+      const isCrawling = enrichPollers.has(lead.id);
+      const hasContacts = (() => {
+        const c = lead.contacts;
+        if (!c) return false;
+        if (Array.isArray(c)) return c.length > 0;
+        if (typeof c === 'string') { try { return JSON.parse(c).length > 0; } catch { return false; } }
+        return false;
+      })();
+      const markDMBtn = (activeListId === 'has-website' && lead.hasWebsite && !hasContacts && !isCrawling)
+        ? `<button class="btn-mark-dm" data-action="find-staff" data-lead-id="${esc(lead.id)}">→ Mark as Decision Maker</button>`
+        : '';
+
       const actions = lead.status === 'new' || lead.status === 'error' ? `
         <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
           <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
@@ -785,10 +959,9 @@ function renderLeadCards(leads) {
               `).join('')}
             </div>
           </div>
+          ${markDMBtn}
           <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
         </div>` : `<div class="lead-actions">${statusBadge}</div>`;
-
-      const staffPanel = renderStaffDirectory(lead);
 
       html.push(`<div class="lead-card ${scoreClass} status-${esc(lead.status)}" data-lead-id="${esc(lead.id)}">
         <div class="lead-card-header">
@@ -807,7 +980,7 @@ function renderLeadCards(leads) {
           ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
           ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
         </div>
-        ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
+        ${lead.scoreReason && activeListId !== 'decision-makers' ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
         ${staffPanel}
         ${actions}
       </div>`);
@@ -842,10 +1015,11 @@ function renderPagination(total, currentPg) {
 }
 
 function goToPage(page) {
-  const totalPages = Math.ceil(currentLeads.length / PAGE_SIZE);
+  const filtered = getActiveListLeads();
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   if (page < 1 || page > totalPages) return;
   currentPage = page;
-  renderLeadCards(currentLeads);
+  renderLeadCards(filtered);
   document.getElementById('leadsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -996,30 +1170,48 @@ async function skipSelected() {
 }
 
 function exportCSV() {
-  const leads = currentLeads.length ? currentLeads : [];
-  if (!leads.length) { alert('No leads to export. Run a scrape first.'); return; }
+  const leads = getActiveListLeads();
+  if (!leads.length) { alert('No leads in this list to export.'); return; }
 
-  const headers = ['Name','Phone','Website','Has Website','Category','Address','City','State','Reviews','Rating','Score','Score Reason','Suggested Sequence','Status','Scraped At'];
-  const rows = leads.map(l => [
-    l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
-    l.category||'', l.address||'', l.city||'', l.state||'',
-    l.reviewCount||0, l.rating||'', l.score||'', l.scoreReason||'',
-    l.suggestedSequence||'', l.status||'', l.scrapedAt||''
-  ].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(','));
+  const isDM = activeListId === 'decision-makers';
+
+  const headers = isDM
+    ? ['Church Name','Church Phone','Website','City','State','Category','Reviews','Score',
+       'Pastor Name','Pastor Title','Pastor Phone','Pastor Email','Status','Scraped At']
+    : ['Name','Phone','Website','Has Website','Category','City','State','Reviews','Rating',
+       'Score','Score Reason','Suggested Sequence','Status','Scraped At'];
+
+  const rows = leads.map(l => {
+    if (isDM) {
+      let contacts = l.contacts || [];
+      if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
+      const p = contacts[0] || {};
+      return [
+        l.name||'', l.phone||'', l.website||'', l.city||'', l.state||'',
+        l.category||'', l.reviewCount||0, l.score||'',
+        p.name||'', p.title||'', p.phone||'', p.email||'',
+        l.status||'', l.scrapedAt||''
+      ];
+    }
+    return [
+      l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
+      l.category||'', l.city||'', l.state||'',
+      l.reviewCount||0, l.rating||'', l.score||'',
+      l.scoreReason||'', l.suggestedSequence||'', l.status||'', l.scrapedAt||''
+    ];
+  }).map(row => row.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(','));
 
   const csv = [headers.join(','), ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'church-leads-' + Date.now() + '.csv';
+  a.download = activeListId + '-' + Date.now() + '.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
 
 // ── WIRE SCRAPER INTO TAB SYSTEM ─────────────────────────────
-// (extends the existing tab click handler)
-const _origTabHandler = document.querySelector('.tab-nav').onclick;
 document.querySelector('.tab-nav').addEventListener('click', e => {
   const btn = e.target.closest('.tab-btn');
   if (btn && btn.dataset.tab === 'scraper') {
@@ -1028,5 +1220,12 @@ document.querySelector('.tab-nav').addEventListener('click', e => {
   }
 });
 
-// Init scraper on load
+// Init scraper on load — also show sidebar lists if scraper tab starts active
 initScraper();
+(function() {
+  const activeTab = document.querySelector('.tab-btn.active');
+  if (activeTab && activeTab.dataset.tab === 'scraper') {
+    const sl = document.getElementById('sidebarLists');
+    if (sl) sl.style.display = 'block';
+  }
+})();
