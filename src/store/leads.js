@@ -140,7 +140,7 @@ async function getLeads(filters = {}) {
   const pool = getPool();
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*) FROM leads ${where}`, values),
-    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts,"enrichRunId","enrichedAt" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
+    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts,"enrichRunId","enrichedAt","batchEnrichRunId" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
   ]);
 
   return { leads: rowsRes.rows, total: parseInt(countRes.rows[0].count) };

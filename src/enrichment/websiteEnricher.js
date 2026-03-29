@@ -4,7 +4,7 @@ const https = require('https');
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
 const MODEL     = 'claude-haiku-4-5-20251001';
 const APIFY_BASE = 'https://api.apify.com/v2';
-const APIFY_ENRICH_ACTOR = 'apify/website-content-crawler';
+const APIFY_ENRICH_ACTOR = 'apify~website-content-crawler';
 
 // Pages most likely to have pastor/staff contact info
 const STAFF_PATHS = [
