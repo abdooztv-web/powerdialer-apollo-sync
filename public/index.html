@@ -193,6 +193,52 @@
           </div>
         </div>
 
+        <!-- Denomination Directory Import -->
+        <div class="directory-import-card card" id="directoryImportCard">
+          <div class="directory-import-header" id="directoryImportToggle">
+            <div class="directory-import-title">
+              <span class="directory-import-icon">📚</span>
+              <div>
+                <div class="directory-import-name">Import from Denomination Directory</div>
+                <div class="directory-import-desc">Pull pastor names, phones &amp; emails directly from official church directories</div>
+              </div>
+            </div>
+            <span class="directory-import-chevron" id="directoryChevron">▼</span>
+          </div>
+          <div class="directory-import-body" id="directoryImportBody" style="display:none">
+            <div class="directory-form">
+              <div class="form-group">
+                <label class="form-label">Denomination</label>
+                <select id="directoryDenomination" class="form-select">
+                  <option value="">Loading...</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Location (State or City) <span style="color:var(--text-muted);font-weight:400">optional</span></label>
+                <input type="text" id="directoryLocation" class="form-input" placeholder="e.g. OH, Ohio, Cleveland OH">
+              </div>
+              <div class="form-group form-group--action">
+                <button class="btn-directory-import" id="btnDirectoryImport">📥 Import Leads</button>
+              </div>
+            </div>
+            <div class="directory-progress" id="directoryProgress" style="display:none">
+              <span class="progress-spinner"></span>
+              <span id="directoryProgressMsg">Fetching directory…</span>
+            </div>
+            <div class="directory-result" id="directoryResult" style="display:none"></div>
+            <div class="directory-badges" id="directoryBadges">
+              <span class="directory-badge directory-badge--orthodox">☦️ OCA</span>
+              <span class="directory-badge directory-badge--orthodox">☦️ GOARCH</span>
+              <span class="directory-badge directory-badge--orthodox">☦️ Antiochian</span>
+              <span class="directory-badge directory-badge--orthodox">☦️ ROCOR</span>
+              <span class="directory-badge directory-badge--christian">✝️ Coptic</span>
+              <span class="directory-badge directory-badge--christian">✝️ SBC</span>
+              <span class="directory-badge directory-badge--christian">✝️ Episcopal</span>
+              <span class="directory-badge directory-badge--christian">✝️ PCUSA</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Stats Row -->
         <div class="stats-row scraper-stats">
           <div class="mini-stat">

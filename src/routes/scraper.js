@@ -5,6 +5,7 @@ const { scoreLeads } = require('../enrichment/scorer');
 const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
 const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
+const { DENOMINATIONS, importFromDirectory } = require('../enrichment/denominationDirectories');
 const logger = require('../utils/logger');
 
 // Active scrape jobs tracked in memory (runId -> status)
@@ -12,6 +13,9 @@ const activeJobs = new Map();
 
 // Active enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
 const enrichJobs = new Map();
+
+// Directory import jobs
+const directoryJobs = new Map();
 
 function fallbackScore(lead) {
   let score = 0;
@@ -308,6 +312,81 @@ router.get('/preview', async (req, res) => {
       message: `You already have ${existing} leads${location ? ' in ' + location : ''}. A new scrape will skip duplicates automatically.`
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/scraper/directory/denominations
+router.get('/directory/denominations', (req, res) => {
+  const list = Object.entries(DENOMINATIONS).map(([id, d]) => ({
+    id,
+    name: d.name,
+    icon: d.icon,
+    category: d.category,
+  }));
+  res.json({ success: true, denominations: list });
+});
+
+// POST /api/scraper/directory/import
+// Body: { denomination, location }
+// Synchronously fetches a denomination directory page and saves all churches as leads.
+router.post('/directory/import', async (req, res) => {
+  const { denomination, location } = req.body;
+  if (!denomination) return res.status(400).json({ success: false, error: 'denomination is required' });
+
+  try {
+    logger.info('Directory import started', { denomination, location });
+
+    const churches = await importFromDirectory(denomination, location);
+
+    if (!churches.length) {
+      return res.json({ success: true, imported: 0, total: 0, message: 'No churches found for this denomination/location. Try a different state or location.' });
+    }
+
+    // Build lead objects with contacts pre-populated
+    const leads = churches.map(c => {
+      const contacts = c.pastorName
+        ? [{ name: c.pastorName, title: c.pastorTitle || 'Pastor', phone: null, email: c.email || null }]
+        : [];
+      return {
+        id: generateId(),
+        placeId: null, // will be generated from name+city hash in saveLeads
+        name: c.name,
+        phone: c.phone || null,
+        website: c.website || null,
+        hasWebsite: !!(c.website),
+        category: DENOMINATIONS[denomination]?.category || 'Church',
+        address: c.address || null,
+        city: c.city || null,
+        state: c.state || null,
+        reviewCount: 0,
+        rating: null,
+        score: 7, // directory leads get a high default score
+        scoreReason: `Imported from ${DENOMINATIONS[denomination]?.name || denomination} directory`,
+        suggestedSequence: 'outreach',
+        status: 'new',
+        scrapedAt: new Date().toISOString(),
+        contacts,
+        enrichedAt: contacts.length > 0 ? new Date().toISOString() : null,
+        source: 'directory',
+        denomination,
+      };
+    });
+
+    const { added, skipped } = await saveLeads(leads, null);
+
+    logger.info('Directory import complete', { denomination, location, total: churches.length, added, skipped });
+
+    res.json({
+      success: true,
+      imported: added,
+      skipped,
+      total: churches.length,
+      withPastor: churches.filter(c => c.pastorName).length,
+      message: `Imported ${added} churches from ${DENOMINATIONS[denomination]?.name}${location ? ' in ' + location : ''}. ${churches.filter(c => c.pastorName).length} have pastor info.`,
+    });
+  } catch (err) {
+    logger.error('Directory import failed', { denomination, location, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });

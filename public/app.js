@@ -491,6 +491,94 @@ async function pollEnrichStatus(leadId, enrichRunId) {
   }
 }
 
+// ── DENOMINATION DIRECTORY IMPORT ───────────────────────────
+async function initDirectoryImport() {
+  // Load denominations into select
+  try {
+    const res = await fetch('/api/scraper/directory/denominations');
+    const data = await res.json();
+    const sel = document.getElementById('directoryDenomination');
+    if (sel && data.denominations) {
+      sel.innerHTML = data.denominations.map(d =>
+        `<option value="${esc(d.id)}">${esc(d.icon)} ${esc(d.name)}</option>`
+      ).join('');
+    }
+  } catch { /* keep default */ }
+
+  // Toggle expand/collapse
+  const toggle = document.getElementById('directoryImportToggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      const body = document.getElementById('directoryImportBody');
+      const chevron = document.getElementById('directoryChevron');
+      if (!body) return;
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : '';
+      if (chevron) chevron.textContent = open ? '▼' : '▲';
+    });
+  }
+
+  // Import button
+  const btn = document.getElementById('btnDirectoryImport');
+  if (btn) {
+    btn.addEventListener('click', runDirectoryImport);
+  }
+}
+
+async function runDirectoryImport() {
+  const denomination = document.getElementById('directoryDenomination')?.value;
+  const location = document.getElementById('directoryLocation')?.value?.trim() || '';
+  const btn = document.getElementById('btnDirectoryImport');
+  const progress = document.getElementById('directoryProgress');
+  const result = document.getElementById('directoryResult');
+
+  if (!denomination) { alert('Please select a denomination'); return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Importing…'; }
+  if (progress) { progress.style.display = 'flex'; }
+  if (result) { result.style.display = 'none'; }
+
+  try {
+    const res = await fetch('/api/scraper/directory/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ denomination, location }),
+    });
+    const data = await res.json();
+
+    if (progress) progress.style.display = 'none';
+
+    if (!data.success) {
+      if (result) {
+        result.style.display = '';
+        result.className = 'directory-result directory-result--error';
+        result.innerHTML = `❌ ${esc(data.error || 'Import failed')}`;
+      }
+    } else {
+      if (result) {
+        result.style.display = '';
+        result.className = 'directory-result directory-result--success';
+        result.innerHTML = `
+          ✅ <strong>${data.imported} churches imported</strong> from the directory
+          <br><span style="font-size:12px;opacity:0.8">${data.withPastor || 0} with pastor info · ${data.skipped || 0} duplicates skipped</span>
+        `;
+      }
+      // Refresh leads
+      await fetchLeads();
+      fetchScraperStats();
+    }
+  } catch (err) {
+    if (progress) progress.style.display = 'none';
+    if (result) {
+      result.style.display = '';
+      result.className = 'directory-result directory-result--error';
+      result.innerHTML = `❌ Error: ${esc(err.message)}`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📥 Import Leads'; }
+  }
+}
+
 // ── SCRAPER INIT ─────────────────────────────────────────────
 function initScraper() {
   // Search type toggle
@@ -554,6 +642,9 @@ function initScraper() {
   // Event delegation on leads list
   document.getElementById('leadsList').addEventListener('click', handleLeadAction);
   document.getElementById('leadsList').addEventListener('change', handleLeadCheckbox);
+
+  // Directory import
+  initDirectoryImport();
 
   // Fetch initial data when tab opens
   fetchLeads();
