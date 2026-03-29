@@ -54,7 +54,9 @@ async function initTable() {
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "apolloContactId" TEXT`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "batchEnrichRunId" TEXT`);
     await client.query(`CREATE INDEX IF NOT EXISTS leads_scrape_run_idx ON leads("scrapeRunId")`);
-    await client.query(`CREATE INDEX IF NOT EXISTS leads_batch_enrich_idx ON leads("batchEnrichRunId")`)
+    await client.query(`CREATE INDEX IF NOT EXISTS leads_batch_enrich_idx ON leads("batchEnrichRunId")`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'scraper'`);
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS denomination TEXT`);
   } finally {
     client.release();
   }
@@ -77,19 +79,24 @@ async function saveLeads(newLeads, scrapeRunId = null) {
   try {
     for (const lead of newLeads) {
       const id = lead.id || generateId();
+      // For directory leads without a placeId, generate one from name+city+state
+      const placeIdVal = lead.placeId ||
+        (lead.name ? crypto.createHash('md5').update(((lead.name || '') + '|' + (lead.city || '') + '|' + (lead.state || '')).toLowerCase()).digest('hex') : null);
       const res = await client.query(`
-        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", contacts, "scrapeRunId", data)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        INSERT INTO leads (id, "placeId", name, phone, website, "hasWebsite", category, address, city, state, "reviewCount", rating, score, "scoreReason", "suggestedSequence", status, "scrapedAt", contacts, "scrapeRunId", source, denomination, "enrichedAt", data)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
         ON CONFLICT ("placeId") DO NOTHING
         RETURNING id
       `, [
-        id, lead.placeId || null, lead.name || null, lead.phone || null,
+        id, placeIdVal, lead.name || null, lead.phone || null,
         lead.website || null, lead.hasWebsite || false, lead.category || null,
         lead.address || null, lead.city || null, lead.state || null,
         lead.reviewCount || 0, lead.rating || null, lead.score || null,
         lead.scoreReason || null, lead.suggestedSequence || null,
         lead.status || 'new', lead.scrapedAt || new Date().toISOString(),
-        JSON.stringify([]), scrapeRunId || lead.scrapeRunId || null,
+        JSON.stringify(lead.contacts || []), scrapeRunId || lead.scrapeRunId || null,
+        lead.source || 'scraper', lead.denomination || null,
+        lead.enrichedAt || null,
         JSON.stringify(lead)
       ]);
       if (res.rowCount > 0) added++;
@@ -140,7 +147,7 @@ async function getLeads(filters = {}) {
   const pool = getPool();
   const [countRes, rowsRes] = await Promise.all([
     pool.query(`SELECT COUNT(*) FROM leads ${where}`, values),
-    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts,"enrichRunId","enrichedAt","batchEnrichRunId" FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
+    pool.query(`SELECT id,"placeId",name,phone,website,"hasWebsite",category,address,city,state,"reviewCount",rating,score,"scoreReason","suggestedSequence",status,"scrapedAt","apolloId",contacts,"enrichRunId","enrichedAt","batchEnrichRunId",source,denomination FROM leads ${where} ORDER BY ${orderBy} LIMIT $${i} OFFSET $${i+1}`, [...values, limit, offset])
   ]);
 
   return { leads: rowsRes.rows, total: parseInt(countRes.rows[0].count) };

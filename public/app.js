@@ -57,11 +57,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('page-' + btn.dataset.tab).classList.add('active');
     if (btn.dataset.tab === 'analytics') fetchAnalytics();
-    // Show/hide sidebar lists section
-    const sidebarLists = document.getElementById('sidebarLists');
-    if (sidebarLists) {
-      sidebarLists.style.display = btn.dataset.tab === 'scraper' ? 'block' : 'none';
-    }
   });
 });
 
@@ -443,263 +438,31 @@ let scrapePollTimer = null;
 let selectedLeadIds = new Set();
 let currentLeadFilters = {};
 let currentLeads = []; // all leads currently loaded in the browser
-let currentPage = 1;
-const PAGE_SIZE = 25;
 
 // enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
 const enrichPollers = new Map();
 
-// ── LISTS ────────────────────────────────────────────────────
-const SCRAPER_LISTS = [
-  {
-    id: 'no-website',
-    name: 'No Website',
-    color: '#ea580c',
-    icon: '📵',
-    filter: lead => !lead.hasWebsite,
-    description: 'Call-first leads — no website found',
-  },
-  {
-    id: 'has-website',
-    name: 'Has Website',
-    color: '#0053db',
-    icon: '🌐',
-    filter: lead => !!lead.hasWebsite,
-    description: 'Email-first leads — website found',
-  },
-  {
-    id: 'decision-makers',
-    name: 'Decision Makers',
-    color: '#16a34a',
-    icon: '👤',
-    filter: lead => {
-      const c = lead.contacts;
-      if (!c) return false;
-      if (Array.isArray(c)) return c.length > 0;
-      if (typeof c === 'string') { try { return JSON.parse(c).length > 0; } catch { return false; } }
-      return false;
-    },
-    description: 'Pastor name + contact info extracted',
-  },
-];
-
-let activeListId = 'no-website';
-let bulkEnrichRunning = false;
-let bulkEnrichCancelled = false;
-
-function renderListsNav() {
-  const nav = document.getElementById('listsNav');
-  if (!nav) return;
-  nav.innerHTML = SCRAPER_LISTS.map(list => {
-    const count = currentLeads.filter(list.filter).length;
-    return `<button class="list-nav-item ${activeListId === list.id ? 'active' : ''}"
-      data-list-id="${list.id}">
-      <span class="list-dot" style="background:${list.color}"></span>
-      <span class="list-item-name">${list.name}</span>
-      <span class="list-item-count">${count}</span>
-    </button>`;
-  }).join('');
-}
-
-function setActiveList(id) {
-  activeListId = id;
-  currentPage = 1;
-  selectedLeadIds.clear();
-  renderListsNav();
-  const list = SCRAPER_LISTS.find(l => l.id === id);
-  const titleEl = document.getElementById('scraperListTitle');
-  if (titleEl && list) titleEl.textContent = list.icon + ' ' + list.name;
-  renderActiveList();
-}
-
-function getActiveListLeads() {
-  const list = SCRAPER_LISTS.find(l => l.id === activeListId);
-  return list ? currentLeads.filter(list.filter) : currentLeads;
-}
-
-function renderActiveList() {
-  const leads = getActiveListLeads();
-  const list = SCRAPER_LISTS.find(l => l.id === activeListId);
-
-  // Update subtitle
-  const subEl = document.getElementById('scraperListSub');
-  if (subEl && list) subEl.textContent = list.description + ' · ' + leads.length + ' leads';
-
-  // Show/hide bulk enrich bar
-  const bulkEnrichBar = document.getElementById('bulkEnrichBar');
-  if (bulkEnrichBar) bulkEnrichBar.style.display = activeListId === 'has-website' ? 'flex' : 'none';
-
-  // Show/hide scrape config (hide on decision-makers)
-  const configCard = document.querySelector('.scraper-config');
-  if (configCard) configCard.style.display = activeListId === 'decision-makers' ? 'none' : '';
-
-  renderLeadCards(leads);
-  updateBulkBar();
-}
-
-// ── BATCH ENRICH — one Apify run for all churches ────────────
-let batchRunId = null;
-let batchPollTimer = null;
-
-async function runBulkEnrich() {
-  if (bulkEnrichRunning) return;
-  bulkEnrichRunning = true;
-
-  const btn       = document.getElementById('btnBulkEnrich');
-  const cancelBtn = document.getElementById('btnBulkCancel');
-  const sub       = document.getElementById('bulkEnrichSub');
-  const progress  = document.getElementById('batchProgress');
-
-  btn.disabled    = true;
-  btn.textContent = '⏳ Starting…';
-  if (cancelBtn) cancelBtn.style.display = '';
-
-  try {
-    // Start ONE batch Apify run for all website leads
-    const res  = await fetch('/api/scraper/enrich/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-    const data = await res.json();
-
-    if (!data.success) {
-      alert(data.error || 'Batch start failed');
-      resetBulkBtn();
-      return;
-    }
-
-    batchRunId = data.batchRunId;
-    const total = data.leadCount;
-
-    if (sub) sub.textContent = `Apify crawling ${total} church websites (${data.urlCount} pages) in parallel…`;
-    if (progress) { progress.style.display = ''; updateBatchProgress(0, total, 'crawling'); }
-    btn.textContent = `🕷 Crawling ${total} churches…`;
-
-    // Poll batch status every 5 seconds
-    batchPollTimer = setInterval(() => pollBatchStatus(total), 5000);
-
-  } catch (err) {
-    alert('Batch enrich error: ' + err.message);
-    resetBulkBtn();
-  }
-}
-
-async function pollBatchStatus(total) {
-  if (!batchRunId) return;
-  try {
-    const res  = await fetch('/api/scraper/enrich/batch/status/' + batchRunId);
-    const data = await res.json();
-
-    const btn      = document.getElementById('btnBulkEnrich');
-    const sub      = document.getElementById('bulkEnrichSub');
-    const progress = document.getElementById('batchProgress');
-    const done     = data.done  || 0;
-    const tot      = data.total || total || 1;
-
-    if (data.status === 'CRAWLING') {
-      if (btn) btn.textContent = `🕷 Apify crawling… (${done}/${tot} processed)`;
-      if (sub) sub.textContent = `Apify is visiting all church websites in parallel. This takes 2–4 minutes…`;
-      updateBatchProgress(done, tot, 'crawling');
-
-    } else if (data.status === 'PROCESSING') {
-      if (btn) btn.textContent = `🤖 Claude reading… ${done}/${tot}`;
-      if (sub) sub.textContent = `Claude is extracting pastor contacts from each church. ${tot - done} remaining…`;
-      updateBatchProgress(done, tot, 'processing');
-      // Each poll processes 8 leads — keep polling fast
-    } else if (data.status === 'DONE') {
-      clearInterval(batchPollTimer);
-      batchPollTimer = null;
-      batchRunId     = null;
-      if (progress) progress.style.display = 'none';
-      resetBulkBtn();
-      await fetchLeads();
-      fetchScraperStats();
-      alert(`✅ Done! Processed ${done} churches. Check the Decision Makers list for all extracted contacts.`);
-
-    } else if (data.status === 'ERROR') {
-      clearInterval(batchPollTimer);
-      batchPollTimer = null;
-      batchRunId     = null;
-      if (progress) progress.style.display = 'none';
-      resetBulkBtn();
-      alert('Batch enrichment failed: ' + (data.error || 'Unknown error'));
-    }
-  } catch {
-    // network hiccup — keep polling
-  }
-}
-
-function updateBatchProgress(done, total, phase) {
-  const bar   = document.getElementById('batchProgressBar');
-  const label = document.getElementById('batchProgressLabel');
-  if (!bar || !label) return;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  bar.style.width = pct + '%';
-  const phaseLabel = phase === 'crawling'    ? '🕷 Apify crawling websites…'
-                   : phase === 'processing'  ? '🤖 Claude extracting contacts…'
-                   : '✅ Done';
-  label.textContent = `${phaseLabel} ${done}/${total} churches · ${pct}%`;
-}
-
-function resetBulkBtn() {
-  bulkEnrichRunning = false;
-  const btn       = document.getElementById('btnBulkEnrich');
-  const cancelBtn = document.getElementById('btnBulkCancel');
-  const sub       = document.getElementById('bulkEnrichSub');
-  if (btn)       { btn.disabled = false; btn.textContent = '▶ Find Staff for All'; }
-  if (cancelBtn) cancelBtn.style.display = 'none';
-  if (sub)       sub.textContent = 'Apify visits all church websites in parallel and Claude extracts pastor name, phone, and email.';
-}
-
-// ── ENRICH METHOD TOGGLE ─────────────────────────────────────
-let enrichMethod = 'claude'; // 'claude' | 'apify'
-
-function initEnrichMethodToggle() {
-  const toggle = document.getElementById('enrichMethodToggle');
-  if (!toggle) return;
-  toggle.addEventListener('click', e => {
-    const btn = e.target.closest('.method-btn');
-    if (!btn) return;
-    toggle.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    enrichMethod = btn.dataset.method;
-  });
-}
-
-// ── ENRICH: START + POLL (claude=sync, apify=async poll) ──────
+// ── ENRICH: WEBSITE CRAWLER POLLING ──────────────────────────
 async function startEnrich(leadId) {
-  enrichPollers.set(leadId, { enrichRunId: 'pending', intervalId: null });
-  renderActiveList();
-
   try {
     const res = await fetch('/api/scraper/enrich/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leadId, method: enrichMethod }),
+      body: JSON.stringify({ leadId }),
     });
     const data = await res.json();
-
     if (!data.success) {
-      enrichPollers.delete(leadId);
-      renderActiveList();
       alert('Enrich failed: ' + data.error);
       return;
     }
 
-    if (data.status === 'DONE') {
-      // Claude direct mode — contacts already saved, refresh immediately
-      enrichPollers.delete(leadId);
-      fetchLeads();
-      fetchScraperStats();
-      return;
-    }
+    const enrichRunId = data.enrichRunId;
+    const intervalId = setInterval(() => pollEnrichStatus(leadId, enrichRunId), 3000);
+    enrichPollers.set(leadId, { enrichRunId, intervalId });
 
-    if (data.status === 'RUNNING' && data.enrichRunId) {
-      // Apify mode — start polling
-      const intervalId = setInterval(() => pollEnrichStatus(leadId, data.enrichRunId), 4000);
-      enrichPollers.set(leadId, { enrichRunId: data.enrichRunId, intervalId });
-      renderActiveList();
-    }
+    // Re-render to show "Crawling…" state
+    fetchLeads();
   } catch (err) {
-    enrichPollers.delete(leadId);
-    renderActiveList();
     alert('Enrich error: ' + err.message);
   }
 }
@@ -711,20 +474,108 @@ async function pollEnrichStatus(leadId, enrichRunId) {
 
     if (data.status === 'DONE') {
       const poller = enrichPollers.get(leadId);
-      if (poller && poller.intervalId) clearInterval(poller.intervalId);
+      if (poller) clearInterval(poller.intervalId);
       enrichPollers.delete(leadId);
+      // Re-render leads to show staff directory
       fetchLeads();
       fetchScraperStats();
-    } else if (data.status === 'ERROR') {
+    } else if (data.status === 'FAILED' || data.status === 'ABORTED' || data.status === 'ERROR') {
       const poller = enrichPollers.get(leadId);
-      if (poller && poller.intervalId) clearInterval(poller.intervalId);
+      if (poller) clearInterval(poller.intervalId);
       enrichPollers.delete(leadId);
-      renderActiveList();
-      alert('Enrichment failed. Try Claude Direct mode instead.');
+      fetchLeads();
     }
     // RUNNING / PROCESSING — keep polling
   } catch {
-    // network hiccup — keep polling
+    // network hiccup, keep polling
+  }
+}
+
+// ── DENOMINATION DIRECTORY IMPORT ───────────────────────────
+async function initDirectoryImport() {
+  // Load denominations into select
+  try {
+    const res = await fetch('/api/scraper/directory/denominations');
+    const data = await res.json();
+    const sel = document.getElementById('directoryDenomination');
+    if (sel && data.denominations) {
+      sel.innerHTML = data.denominations.map(d =>
+        `<option value="${esc(d.id)}">${esc(d.icon)} ${esc(d.name)}</option>`
+      ).join('');
+    }
+  } catch { /* keep default */ }
+
+  // Toggle expand/collapse
+  const toggle = document.getElementById('directoryImportToggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      const body = document.getElementById('directoryImportBody');
+      const chevron = document.getElementById('directoryChevron');
+      if (!body) return;
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : '';
+      if (chevron) chevron.textContent = open ? '▼' : '▲';
+    });
+  }
+
+  // Import button
+  const btn = document.getElementById('btnDirectoryImport');
+  if (btn) {
+    btn.addEventListener('click', runDirectoryImport);
+  }
+}
+
+async function runDirectoryImport() {
+  const denomination = document.getElementById('directoryDenomination')?.value;
+  const location = document.getElementById('directoryLocation')?.value?.trim() || '';
+  const btn = document.getElementById('btnDirectoryImport');
+  const progress = document.getElementById('directoryProgress');
+  const result = document.getElementById('directoryResult');
+
+  if (!denomination) { alert('Please select a denomination'); return; }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Importing…'; }
+  if (progress) { progress.style.display = 'flex'; }
+  if (result) { result.style.display = 'none'; }
+
+  try {
+    const res = await fetch('/api/scraper/directory/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ denomination, location }),
+    });
+    const data = await res.json();
+
+    if (progress) progress.style.display = 'none';
+
+    if (!data.success) {
+      if (result) {
+        result.style.display = '';
+        result.className = 'directory-result directory-result--error';
+        result.innerHTML = `❌ ${esc(data.error || 'Import failed')}`;
+      }
+    } else {
+      if (result) {
+        result.style.display = '';
+        result.className = 'directory-result directory-result--success';
+        result.innerHTML = `
+          ✅ <strong>${data.imported} churches imported</strong> from the directory
+          <br><span style="font-size:12px;opacity:0.8">${data.withPastor || 0} with pastor info · ${data.skipped || 0} duplicates skipped</span>
+        `;
+      }
+      // Refresh leads
+      await fetchLeads();
+      fetchScraperStats();
+    }
+  } catch (err) {
+    if (progress) progress.style.display = 'none';
+    if (result) {
+      result.style.display = '';
+      result.className = 'directory-result directory-result--error';
+      result.innerHTML = `❌ Error: ${esc(err.message)}`;
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '📥 Import Leads'; }
   }
 }
 
@@ -756,21 +607,8 @@ function initScraper() {
   document.getElementById('btnRunScrape').addEventListener('click', runScrape);
   document.getElementById('btnPreviewScrape').addEventListener('click', previewScrape);
 
-  // Bulk enrich
-  document.getElementById('btnBulkEnrich').addEventListener('click', runBulkEnrich);
-  document.getElementById('btnBulkCancel').addEventListener('click', () => { bulkEnrichCancelled = true; });
-
-  // Sidebar list switching — event delegation on the nav container
-  document.getElementById('listsNav').addEventListener('click', function(e) {
-    const btn = e.target.closest('[data-list-id]');
-    if (btn) setActiveList(btn.dataset.listId);
-  });
-
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
-
-  // Bulk delete
-  document.getElementById('btnBulkDelete').addEventListener('click', deleteSelected);
 
   // Export CSV
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
@@ -805,8 +643,8 @@ function initScraper() {
   document.getElementById('leadsList').addEventListener('click', handleLeadAction);
   document.getElementById('leadsList').addEventListener('change', handleLeadCheckbox);
 
-  // Enrich method toggle
-  initEnrichMethodToggle();
+  // Directory import
+  initDirectoryImport();
 
   // Fetch initial data when tab opens
   fetchLeads();
@@ -932,9 +770,7 @@ async function fetchLeads() {
     const data = await res.json();
     if (data.success) {
       currentLeads = data.leads;
-      currentPage = 1;
-      renderListsNav();
-      renderActiveList();
+      renderLeadCards(data.leads, data.total);
     }
   } catch { /* silent */ }
 }
@@ -952,7 +788,6 @@ async function fetchScraperStats() {
       const badge = document.getElementById('scraperBadge');
       if (s.new > 0) { badge.textContent = s.new; badge.style.display = ''; }
       else badge.style.display = 'none';
-      renderListsNav();
     }
   } catch { /* silent */ }
 }
@@ -1020,15 +855,9 @@ function renderLeadCards(leads) {
     return;
   }
 
-  // Paginate
-  const totalLeads = leads.length;
-  const totalPages = Math.ceil(totalLeads / PAGE_SIZE);
-  if (currentPage > totalPages) currentPage = Math.max(1, totalPages);
-  const pageLeads = leads.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-  // Group the current page's leads by date
-  const groups = groupByDate(pageLeads);
-  let globalIndex = (currentPage - 1) * PAGE_SIZE;
+  // Group by date
+  const groups = groupByDate(leads);
+  let globalIndex = 0;
   const html = [];
 
   Object.entries(groups).forEach(([date, groupLeads]) => {
@@ -1047,50 +876,6 @@ function renderLeadCards(leads) {
         : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
         : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
 
-      // Staff panel — DM mode shows contact cards; others use staff directory
-      let staffPanel;
-      if (activeListId === 'decision-makers') {
-        let contacts = lead.contacts || [];
-        if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
-        staffPanel = contacts.map(c => {
-          const initials = (c.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-          return `<div class="dm-contact-card">
-            <div class="dm-card-top">
-              <div class="dm-avatar">${esc(initials)}</div>
-              <div class="dm-card-identity">
-                <div class="dm-name">${esc(c.name || '—')}</div>
-                ${c.title ? `<div class="dm-title">${esc(c.title)}</div>` : ''}
-              </div>
-            </div>
-            <div class="dm-card-contacts">
-              ${c.phone ? `<a href="tel:${esc(c.phone)}" class="dm-contact-item dm-phone">
-                <span class="dm-contact-icon">📞</span>
-                <span class="dm-contact-val">${esc(c.phone)}</span>
-              </a>` : '<span class="dm-contact-missing">No phone found</span>'}
-              ${c.email ? `<a href="mailto:${esc(c.email)}" class="dm-contact-item dm-email">
-                <span class="dm-contact-icon">✉</span>
-                <span class="dm-contact-val">${esc(c.email)}</span>
-              </a>` : '<span class="dm-contact-missing">No email found</span>'}
-            </div>
-          </div>`;
-        }).join('');
-      } else {
-        staffPanel = renderStaffDirectory(lead);
-      }
-
-      // "Mark as Decision Maker" button for has-website leads with no contacts yet
-      const isCrawling = enrichPollers.has(lead.id);
-      const hasContacts = (() => {
-        const c = lead.contacts;
-        if (!c) return false;
-        if (Array.isArray(c)) return c.length > 0;
-        if (typeof c === 'string') { try { return JSON.parse(c).length > 0; } catch { return false; } }
-        return false;
-      })();
-      const markDMBtn = (activeListId === 'has-website' && lead.hasWebsite && !hasContacts && !isCrawling)
-        ? `<button class="btn-mark-dm" data-action="find-staff" data-lead-id="${esc(lead.id)}">→ Mark as Decision Maker</button>`
-        : '';
-
       const actions = lead.status === 'new' || lead.status === 'error' ? `
         <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
           <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
@@ -1101,9 +886,10 @@ function renderLeadCards(leads) {
               `).join('')}
             </div>
           </div>
-          ${markDMBtn}
           <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
         </div>` : `<div class="lead-actions">${statusBadge}</div>`;
+
+      const staffPanel = renderStaffDirectory(lead);
 
       html.push(`<div class="lead-card ${scoreClass} status-${esc(lead.status)}" data-lead-id="${esc(lead.id)}">
         <div class="lead-card-header">
@@ -1114,7 +900,6 @@ function renderLeadCards(leads) {
             <span class="score-badge ${scoreClass}">${scoreLabel}</span>
             ${!lead.hasWebsite ? '<span class="no-website-badge">No Website</span>' : ''}
           </div>
-          <button class="btn-delete-lead" data-action="delete-lead" data-lead-id="${esc(lead.id)}" title="Delete lead">🗑</button>
         </div>
         <div class="lead-meta">
           ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
@@ -1122,48 +907,14 @@ function renderLeadCards(leads) {
           ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
           ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
           ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
-        </div>
-        ${lead.scoreReason && activeListId !== 'decision-makers' ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
+        ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
         ${staffPanel}
         ${actions}
       </div>`);
     });
   });
 
-  container.innerHTML = html.join('') + renderPagination(totalLeads, currentPage);
-}
-
-// ── PAGINATION ────────────────────────────────────────────────
-function renderPagination(total, currentPg) {
-  const totalPages = Math.ceil(total / PAGE_SIZE);
-  if (totalPages <= 1) return '';
-
-  const pages = [];
-  for (let i = 1; i <= totalPages; i++) {
-    const isActive = i === currentPg;
-    const isNear = Math.abs(i - currentPg) <= 2 || i === 1 || i === totalPages;
-    if (isNear) {
-      pages.push(`<button class="pg-btn ${isActive ? 'pg-btn--active' : ''}" onclick="goToPage(${i})">${i}</button>`);
-    } else if (pages[pages.length - 1] !== '...') {
-      pages.push(`<span class="pg-ellipsis">…</span>`);
-    }
-  }
-
-  return `<div class="pagination-bar">
-    <button class="pg-btn pg-btn--nav" onclick="goToPage(${currentPg - 1})" ${currentPg === 1 ? 'disabled' : ''}>← Prev</button>
-    ${pages.join('')}
-    <button class="pg-btn pg-btn--nav" onclick="goToPage(${currentPg + 1})" ${currentPg === totalPages ? 'disabled' : ''}>Next →</button>
-    <span class="pg-info">Page ${currentPg} of ${totalPages} · ${total} leads total</span>
-  </div>`;
-}
-
-function goToPage(page) {
-  const filtered = getActiveListLeads();
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  if (page < 1 || page > totalPages) return;
-  currentPage = page;
-  renderLeadCards(filtered);
-  document.getElementById('leadsList').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  container.innerHTML = html.join('');
 }
 
 // ── LEAD ACTION HANDLER (event delegation) ───────────────────
@@ -1194,10 +945,6 @@ function handleLeadAction(e) {
 
   if (action === 'find-staff') {
     startEnrich(leadId);
-  }
-
-  if (action === 'delete-lead') {
-    deleteSingleLead(leadId);
   }
 }
 
@@ -1248,50 +995,6 @@ async function skipSingleLead(leadId) {
     });
     setTimeout(() => { fetchLeads(); fetchScraperStats(); }, 600);
   } catch { /* silent */ }
-}
-
-async function deleteSingleLead(leadId) {
-  // Remove the card instantly from the DOM for snappy UX, then confirm in bg
-  const card = document.querySelector(`.lead-card[data-lead-id="${leadId}"]`);
-  if (card) card.remove();
-  selectedLeadIds.delete(leadId);
-  currentLeads = currentLeads.filter(l => l.id !== leadId);
-  updateBulkBar();
-  try {
-    await fetch('/api/scraper/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: [leadId] }),
-    });
-    fetchScraperStats();
-  } catch { /* silent */ }
-}
-
-async function deleteSelected() {
-  if (!selectedLeadIds.size) return;
-  const ids = Array.from(selectedLeadIds);
-  const noun = ids.length === 1 ? '1 lead' : ids.length + ' leads';
-  if (!confirm(`Permanently delete ${noun}? This cannot be undone.`)) return;
-  // Remove from DOM immediately
-  ids.forEach(id => {
-    const card = document.querySelector(`.lead-card[data-lead-id="${id}"]`);
-    if (card) card.remove();
-  });
-  currentLeads = currentLeads.filter(l => !selectedLeadIds.has(l.id));
-  selectedLeadIds.clear();
-  updateBulkBar();
-  try {
-    await fetch('/api/scraper/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    });
-    fetchLeads();
-    fetchScraperStats();
-  } catch (err) {
-    alert('Delete failed: ' + err.message);
-    fetchLeads();
-  }
 }
 
 function setLeadState(leadId, state, msg) {
@@ -1361,48 +1064,30 @@ async function skipSelected() {
 }
 
 function exportCSV() {
-  const leads = getActiveListLeads();
-  if (!leads.length) { alert('No leads in this list to export.'); return; }
+  const leads = currentLeads.length ? currentLeads : [];
+  if (!leads.length) { alert('No leads to export. Run a scrape first.'); return; }
 
-  const isDM = activeListId === 'decision-makers';
-
-  const headers = isDM
-    ? ['Church Name','Church Phone','Website','City','State','Category','Reviews','Score',
-       'Pastor Name','Pastor Title','Pastor Phone','Pastor Email','Status','Scraped At']
-    : ['Name','Phone','Website','Has Website','Category','City','State','Reviews','Rating',
-       'Score','Score Reason','Suggested Sequence','Status','Scraped At'];
-
-  const rows = leads.map(l => {
-    if (isDM) {
-      let contacts = l.contacts || [];
-      if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
-      const p = contacts[0] || {};
-      return [
-        l.name||'', l.phone||'', l.website||'', l.city||'', l.state||'',
-        l.category||'', l.reviewCount||0, l.score||'',
-        p.name||'', p.title||'', p.phone||'', p.email||'',
-        l.status||'', l.scrapedAt||''
-      ];
-    }
-    return [
-      l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
-      l.category||'', l.city||'', l.state||'',
-      l.reviewCount||0, l.rating||'', l.score||'',
-      l.scoreReason||'', l.suggestedSequence||'', l.status||'', l.scrapedAt||''
-    ];
-  }).map(row => row.map(v => '"' + String(v).replace(/"/g,'""') + '"').join(','));
+  const headers = ['Name','Phone','Website','Has Website','Category','Address','City','State','Reviews','Rating','Score','Score Reason','Suggested Sequence','Status','Scraped At'];
+  const rows = leads.map(l => [
+    l.name||'', l.phone||'', l.website||'', l.hasWebsite?'Yes':'No',
+    l.category||'', l.address||'', l.city||'', l.state||'',
+    l.reviewCount||0, l.rating||'', l.score||'', l.scoreReason||'',
+    l.suggestedSequence||'', l.status||'', l.scrapedAt||''
+  ].map(v => '"' + String(v).replace(/"/g,'""') + '"').join(','));
 
   const csv = [headers.join(','), ...rows].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = activeListId + '-' + Date.now() + '.csv';
+  a.download = 'church-leads-' + Date.now() + '.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
 
 // ── WIRE SCRAPER INTO TAB SYSTEM ─────────────────────────────
+// (extends the existing tab click handler)
+const _origTabHandler = document.querySelector('.tab-nav').onclick;
 document.querySelector('.tab-nav').addEventListener('click', e => {
   const btn = e.target.closest('.tab-btn');
   if (btn && btn.dataset.tab === 'scraper') {
@@ -1411,12 +1096,5 @@ document.querySelector('.tab-nav').addEventListener('click', e => {
   }
 });
 
-// Init scraper on load — also show sidebar lists if scraper tab starts active
+// Init scraper on load
 initScraper();
-(function() {
-  const activeTab = document.querySelector('.tab-btn.active');
-  if (activeTab && activeTab.dataset.tab === 'scraper') {
-    const sl = document.getElementById('sidebarLists');
-    if (sl) sl.style.display = 'block';
-  }
-})();

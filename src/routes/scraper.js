@@ -2,23 +2,20 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
-const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset,
-        startBatchEnrichCrawl, fetchAllDatasetItems, groupItemsByDomain, extractContactsForChurch, getDomain } = require('../enrichment/websiteEnricher');
-const { saveLeads, getLeads, updateLead, deleteLeads, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
+const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
+const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
+const { DENOMINATIONS, importFromDirectory } = require('../enrichment/denominationDirectories');
 const logger = require('../utils/logger');
 
 // Active scrape jobs tracked in memory (runId -> status)
 const activeJobs = new Map();
 
-// Active Apify enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
-// Note: used only for same-instance polling; DB is the source of truth for completion
+// Active enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
 const enrichJobs = new Map();
 
-// Batch enrich jobs: batchRunId -> { domainToLeadId, datasetId, status, items? }
-// domainToLeadId: { 'church.org': { leadId, churchName } }
-const batchJobs = new Map();
-
+// Directory import jobs
+const directoryJobs = new Map();
 
 function fallbackScore(lead) {
   let score = 0;
@@ -59,22 +56,8 @@ router.get('/status/:runId', async (req, res) => {
     const job = activeJobs.get(runId) || {};
     const apifyStatus = await getJobStatus(runId);
 
-    if (apifyStatus.status === 'SUCCEEDED') {
-      // Check DB first — if this runId already has leads saved, return immediately.
-      // This prevents reprocessing when Vercel spins up a new cold-start instance
-      // and the in-memory activeJobs Map is empty (job.scored is lost).
-      const alreadySaved = await getRunResult(runId);
-      if (alreadySaved > 0) {
-        return res.json({ success: true, status: 'DONE', count: alreadySaved, skipped: 0, total: alreadySaved });
-      }
-
-      // Also skip if already processing in this instance
-      if (job.scored) {
-        const localStatus = job.status || 'PROCESSING';
-        return res.json({ success: true, status: localStatus, count: job.count || 0, skipped: job.skipped || 0 });
-      }
-
-      // Mark scored in memory to prevent concurrent polls in the same instance
+    if (apifyStatus.status === 'SUCCEEDED' && !job.scored) {
+      // Mark scored immediately to prevent double-processing on concurrent polls
       activeJobs.set(runId, { ...job, status: 'PROCESSING', scored: true });
 
       // Synchronous: fetch + score + save within this request (required for Vercel)
@@ -98,7 +81,7 @@ router.get('/status/:runId', async (req, res) => {
           scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
         }
 
-        const { added, skipped } = await saveLeads(scored, runId);
+        const { added, skipped } = await saveLeads(scored);
         activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added, skipped });
         logger.info('Scrape complete', { runId, total: raw.length, added, skipped });
         return res.json({ success: true, status: 'DONE', count: added, skipped, total: raw.length });
@@ -225,259 +208,79 @@ router.post('/skip', async (req, res) => {
   res.json({ success: true, skipped: ids.length });
 });
 
-// POST /api/scraper/delete
-// Body: { ids: string[] }  — permanently removes leads from DB
-router.post('/delete', async (req, res) => {
-  const { ids = [] } = req.body;
-  if (!ids.length) return res.status(400).json({ success: false, error: 'No IDs provided' });
-  try {
-    const count = await deleteLeads(ids);
-    logger.info('Leads deleted', { count, ids: ids.slice(0, 5) });
-    res.json({ success: true, deleted: count });
-  } catch (err) {
-    logger.error('Delete leads failed', { error: err.message });
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
 // POST /api/scraper/enrich/start
-// Body: { leadId, method }
-//   method='claude' (default) — synchronous direct HTTP fetch, returns contacts immediately
-//   method='apify'            — starts Apify website-content-crawler, returns enrichRunId for polling
+// Body: { leadId }  — kicks off Apify website-content-crawler for lead's website
 router.post('/enrich/start', async (req, res) => {
-  const { leadId, method = 'claude' } = req.body;
+  const { leadId } = req.body;
   if (!leadId) return res.status(400).json({ success: false, error: 'leadId is required' });
 
   try {
-    const { leads } = await getLeads({ limit: 5000 });
+    // Look up the lead to get its website
+    const { leads } = await getLeads({});
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (!lead.website) return res.status(400).json({ success: false, error: 'Lead has no website' });
 
-    if (method === 'apify') {
-      // ── APIFY MODE: async start → poll /enrich/status/:runId ──
-      if (!process.env.APIFY_API_TOKEN) {
-        return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
-      }
-      const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
-      enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId });
-      await updateLead(leadId, { enrichRunId });
-      logger.info('Apify enrich started', { enrichRunId, leadId, website: lead.website });
-      return res.json({ success: true, status: 'RUNNING', enrichRunId });
+    if (!process.env.APIFY_API_TOKEN) {
+      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
     }
 
-    // ── CLAUDE DIRECT MODE: synchronous, contacts returned immediately ──
-    logger.info('Claude direct enrich', { leadId, website: lead.website });
-    const contacts = await enrichWebsite(lead.website, lead.name);
-    await updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
-    logger.info('Claude enrich complete', { leadId, contactCount: contacts.length });
-    return res.json({ success: true, status: 'DONE', contacts, contactCount: contacts.length });
+    const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
 
+    enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId, startedAt: new Date().toISOString() });
+
+    // Persist enrichRunId on the lead record
+    await updateLead(leadId, { enrichRunId });
+
+    logger.info('Enrich crawl started', { enrichRunId, leadId, website: lead.website });
+    res.json({ success: true, enrichRunId, leadId });
   } catch (err) {
-    logger.error('Enrich failed', { error: err.message });
+    logger.error('Failed to start enrich crawl', { error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // GET /api/scraper/enrich/status/:enrichRunId
-// Used by Apify mode to poll completion. DB-backed: if lead already has enrichedAt, returns DONE.
+// Polls Apify; when SUCCEEDED fetches content, sends to Claude, saves contacts on the lead
 router.get('/enrich/status/:enrichRunId', async (req, res) => {
   const { enrichRunId } = req.params;
   try {
-    // DB-backed idempotency: check if this lead was already enriched (survives Vercel cold starts)
-    const { leads } = await getLeads({ limit: 5000 });
-    const lead = leads.find(l => l.enrichRunId === enrichRunId);
-
-    if (lead && lead.enrichedAt) {
-      // Already processed — return contacts from DB
-      let contacts = lead.contacts || [];
-      if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
-      return res.json({ success: true, status: 'DONE', contactCount: contacts.length });
-    }
-
-    // Check Apify status
+    const job = enrichJobs.get(enrichRunId) || {};
     const apifyStatus = await getEnrichStatus(enrichRunId);
 
-    if (apifyStatus.status === 'SUCCEEDED') {
-      const job = enrichJobs.get(enrichRunId) || {};
-      const leadId = job.leadId || (lead && lead.id);
-
-      if (!leadId) {
-        return res.json({ success: true, status: 'DONE', contactCount: 0 });
-      }
-
-      // Extract contacts from dataset and save — mark as PROCESSING in memory
+    if (apifyStatus.status === 'SUCCEEDED' && job.status !== 'DONE' && job.status !== 'PROCESSING') {
+      // Mark as processing to prevent duplicate extraction
       enrichJobs.set(enrichRunId, { ...job, status: 'PROCESSING' });
 
+      // Async: fetch content, extract contacts via Claude, save to lead
+      const leadId = job.leadId;
+      const { leads } = await getLeads({});
+      const lead = leads.find(l => l.id === leadId);
       const churchName = lead ? lead.name : '';
+
       extractContactsFromDataset(apifyStatus.datasetId || job.datasetId, churchName)
         .then(contacts => {
           updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
           enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'DONE', contactCount: contacts.length });
-          logger.info('Apify enrich complete', { enrichRunId, leadId, contactCount: contacts.length });
+          logger.info('Enrich complete', { enrichRunId, leadId, contactCount: contacts.length });
         })
         .catch(err => {
           enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'ERROR', error: err.message });
+          logger.error('Enrich extraction failed', { enrichRunId, error: err.message });
         });
 
-      return res.json({ success: true, status: 'PROCESSING' });
+      return res.json({ success: true, status: 'PROCESSING', message: 'Extracting contacts with Claude AI…' });
     }
 
-    if (apifyStatus.status === 'FAILED' || apifyStatus.status === 'ABORTED') {
-      return res.json({ success: true, status: 'ERROR', error: 'Apify run ' + apifyStatus.status });
-    }
-
-    const memStatus = (enrichJobs.get(enrichRunId) || {}).status || apifyStatus.status;
-    return res.json({ success: true, status: memStatus });
-
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// POST /api/scraper/enrich/batch
-// Starts ONE Apify run crawling ALL church websites simultaneously.
-// Body: { leadIds? } — if omitted, uses all leads with websites and no contacts yet.
-router.post('/enrich/batch', async (req, res) => {
-  try {
-    if (!process.env.APIFY_API_TOKEN) {
-      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
-    }
-
-    // Fetch all leads with websites (re-runs are allowed — markBatchLeads resets enrichedAt)
-    const { leads: allLeads } = await getLeads({ hasWebsite: 'true', limit: 2000 });
-    const toEnrich = allLeads.filter(l => !!l.website);
-
-    if (!toEnrich.length) {
-      return res.json({ success: false, error: 'No leads with websites found. Run a scrape first.' });
-    }
-
-    logger.info('Starting batch enrich', { count: toEnrich.length });
-
-    const { batchRunId, datasetId, domainToLeadId } = await startBatchEnrichCrawl(toEnrich);
-
-    // Store the domain→lead mapping in memory and in DB
-    batchJobs.set(batchRunId, {
-      domainToLeadId,
-      datasetId,
-      status: 'RUNNING',
-      total: toEnrich.length,
-      startedAt: new Date().toISOString(),
-    });
-
-    // Mark all included leads with this batchRunId in DB (for progress tracking)
-    await markBatchLeads(toEnrich.map(l => l.id), batchRunId);
-
-    const urlCount = Object.keys(domainToLeadId).length * 6; // 6 paths per church
-    logger.info('Batch enrich started', { batchRunId, leads: toEnrich.length, urls: urlCount });
-
+    const localStatus = job.status || apifyStatus.status;
     res.json({
       success: true,
-      batchRunId,
-      leadCount: toEnrich.length,
-      urlCount,
-      message: `Apify is crawling ${toEnrich.length} church websites (${urlCount} pages) in parallel`,
+      status: localStatus,
+      apifyStatus: apifyStatus.status,
+      contactCount: job.contactCount || 0,
+      error: job.error || null,
     });
   } catch (err) {
-    logger.error('Batch enrich start failed', { error: err.message });
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// GET /api/scraper/enrich/batch/status/:batchRunId
-// Polls Apify. When SUCCEEDED, processes churches in chunks of 8 per request.
-// Each poll call processes 8 more churches — distributes work to avoid Vercel timeouts.
-router.get('/enrich/batch/status/:batchRunId', async (req, res) => {
-  const { batchRunId } = req.params;
-  try {
-    // Get DB progress first — source of truth for how many are done
-    const { total, done } = await getBatchProgress(batchRunId);
-
-    // If all done per DB
-    if (total > 0 && done >= total) {
-      if (batchJobs.has(batchRunId)) {
-        batchJobs.set(batchRunId, { ...batchJobs.get(batchRunId), status: 'DONE' });
-      }
-      return res.json({ success: true, status: 'DONE', total, done, found: done });
-    }
-
-    // Get or reconstruct job from memory
-    let job = batchJobs.get(batchRunId);
-
-    // Check Apify run status
-    const apifyStatus = await getEnrichStatus(batchRunId);
-
-    if (apifyStatus.status === 'RUNNING' || apifyStatus.status === 'READY') {
-      return res.json({ success: true, status: 'CRAWLING', total, done, apifyStatus: apifyStatus.status });
-    }
-
-    if (apifyStatus.status === 'FAILED' || apifyStatus.status === 'ABORTED') {
-      return res.json({ success: true, status: 'ERROR', error: 'Apify run ' + apifyStatus.status, total, done });
-    }
-
-    if (apifyStatus.status === 'SUCCEEDED') {
-      // Fetch dataset items once and cache in memory
-      if (!job || !job.items) {
-        const items = await fetchAllDatasetItems(apifyStatus.datasetId || (job && job.datasetId));
-        const itemsByDomain = groupItemsByDomain(items);
-        const existing = job || { domainToLeadId: {}, total, status: 'SUCCEEDED' };
-        job = { ...existing, items, itemsByDomain, status: 'PROCESSING' };
-        batchJobs.set(batchRunId, job);
-        logger.info('Batch dataset fetched', { batchRunId, itemCount: items.length, domains: Object.keys(itemsByDomain).length });
-      }
-
-      // Find leads NOT yet enriched in this batch (query DB)
-      const { leads: batchLeads } = await getLeads({ limit: 2000 });
-      const pending = batchLeads.filter(l =>
-        l.batchEnrichRunId === batchRunId && !l.enrichedAt
-      );
-
-      if (!pending.length) {
-        batchJobs.set(batchRunId, { ...job, status: 'DONE' });
-        return res.json({ success: true, status: 'DONE', total, done, found: done });
-      }
-
-      // Process next chunk of 4 leads (stays under Vercel 10s timeout)
-      const chunk = pending.slice(0, 4);
-      const itemsByDomain = job.itemsByDomain || {};
-
-      await Promise.all(chunk.map(async lead => {
-        try {
-          const domain = getDomain(lead.website || '');
-          const churchItems = itemsByDomain[domain] || [];
-          const contacts = churchItems.length
-            ? await extractContactsForChurch(churchItems, lead.name)
-            : [];
-          await updateLead(lead.id, {
-            contacts: JSON.stringify(contacts),
-            enrichedAt: new Date().toISOString(),
-          });
-          logger.info('Batch: church enriched', { leadId: lead.id, domain, contactCount: contacts.length });
-        } catch (err) {
-          // Mark as done even on error so it doesn't block progress
-          await updateLead(lead.id, { enrichedAt: new Date().toISOString(), contacts: '[]' });
-          logger.warn('Batch: church enrich failed', { leadId: lead.id, error: err.message });
-        }
-      }));
-
-      const newDone = done + chunk.length;
-      const stillPending = pending.length - chunk.length;
-
-      logger.info('Batch chunk processed', { batchRunId, chunkSize: chunk.length, newDone, stillPending });
-      return res.json({
-        success: true,
-        status: stillPending > 0 ? 'PROCESSING' : 'DONE',
-        total,
-        done: newDone,
-        pending: stillPending,
-      });
-    }
-
-    // Apify still in another state
-    return res.json({ success: true, status: 'CRAWLING', total, done, apifyStatus: apifyStatus.status });
-
-  } catch (err) {
-    logger.error('Batch status failed', { batchRunId, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -509,6 +312,81 @@ router.get('/preview', async (req, res) => {
       message: `You already have ${existing} leads${location ? ' in ' + location : ''}. A new scrape will skip duplicates automatically.`
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/scraper/directory/denominations
+router.get('/directory/denominations', (req, res) => {
+  const list = Object.entries(DENOMINATIONS).map(([id, d]) => ({
+    id,
+    name: d.name,
+    icon: d.icon,
+    category: d.category,
+  }));
+  res.json({ success: true, denominations: list });
+});
+
+// POST /api/scraper/directory/import
+// Body: { denomination, location }
+// Synchronously fetches a denomination directory page and saves all churches as leads.
+router.post('/directory/import', async (req, res) => {
+  const { denomination, location } = req.body;
+  if (!denomination) return res.status(400).json({ success: false, error: 'denomination is required' });
+
+  try {
+    logger.info('Directory import started', { denomination, location });
+
+    const churches = await importFromDirectory(denomination, location);
+
+    if (!churches.length) {
+      return res.json({ success: true, imported: 0, total: 0, message: 'No churches found for this denomination/location. Try a different state or location.' });
+    }
+
+    // Build lead objects with contacts pre-populated
+    const leads = churches.map(c => {
+      const contacts = c.pastorName
+        ? [{ name: c.pastorName, title: c.pastorTitle || 'Pastor', phone: null, email: c.email || null }]
+        : [];
+      return {
+        id: generateId(),
+        placeId: null, // will be generated from name+city hash in saveLeads
+        name: c.name,
+        phone: c.phone || null,
+        website: c.website || null,
+        hasWebsite: !!(c.website),
+        category: DENOMINATIONS[denomination]?.category || 'Church',
+        address: c.address || null,
+        city: c.city || null,
+        state: c.state || null,
+        reviewCount: 0,
+        rating: null,
+        score: 7, // directory leads get a high default score
+        scoreReason: `Imported from ${DENOMINATIONS[denomination]?.name || denomination} directory`,
+        suggestedSequence: 'outreach',
+        status: 'new',
+        scrapedAt: new Date().toISOString(),
+        contacts,
+        enrichedAt: contacts.length > 0 ? new Date().toISOString() : null,
+        source: 'directory',
+        denomination,
+      };
+    });
+
+    const { added, skipped } = await saveLeads(leads, null);
+
+    logger.info('Directory import complete', { denomination, location, total: churches.length, added, skipped });
+
+    res.json({
+      success: true,
+      imported: added,
+      skipped,
+      total: churches.length,
+      withPastor: churches.filter(c => c.pastorName).length,
+      message: `Imported ${added} churches from ${DENOMINATIONS[denomination]?.name}${location ? ' in ' + location : ''}. ${churches.filter(c => c.pastorName).length} have pastor info.`,
+    });
+  } catch (err) {
+    logger.error('Directory import failed', { denomination, location, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
