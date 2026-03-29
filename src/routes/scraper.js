@@ -431,8 +431,8 @@ router.get('/enrich/batch/status/:batchRunId', async (req, res) => {
         return res.json({ success: true, status: 'DONE', total, done, found: done });
       }
 
-      // Process next chunk of 8 leads (stays under Vercel timeout)
-      const chunk = pending.slice(0, 8);
+      // Process next chunk of 4 leads (stays under Vercel 10s timeout)
+      const chunk = pending.slice(0, 4);
       const itemsByDomain = job.itemsByDomain || {};
 
       await Promise.all(chunk.map(async lead => {
@@ -457,6 +457,7 @@ router.get('/enrich/batch/status/:batchRunId', async (req, res) => {
       const newDone = done + chunk.length;
       const stillPending = pending.length - chunk.length;
 
+      logger.info('Batch chunk processed', { batchRunId, chunkSize: chunk.length, newDone, stillPending });
       return res.json({
         success: true,
         status: stillPending > 0 ? 'PROCESSING' : 'DONE',
