@@ -344,21 +344,12 @@ router.post('/enrich/batch', async (req, res) => {
       return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
     }
 
-    // Fetch all leads with websites and no contacts yet
+    // Fetch all leads with websites (re-runs are allowed — markBatchLeads resets enrichedAt)
     const { leads: allLeads } = await getLeads({ hasWebsite: 'true', limit: 2000 });
-    const toEnrich = allLeads.filter(l => {
-      if (!l.website) return false;
-      const c = l.contacts;
-      if (!c) return true;
-      if (Array.isArray(c)) return c.length === 0;
-      if (typeof c === 'string') {
-        try { return JSON.parse(c).length === 0; } catch { return true; }
-      }
-      return true;
-    });
+    const toEnrich = allLeads.filter(l => !!l.website);
 
     if (!toEnrich.length) {
-      return res.json({ success: false, error: 'No website leads without contacts found. All done!' });
+      return res.json({ success: false, error: 'No leads with websites found. Run a scrape first.' });
     }
 
     logger.info('Starting batch enrich', { count: toEnrich.length });

@@ -197,11 +197,13 @@ async function getBatchProgress(batchRunId) {
   return { total: parseInt(r.total), done: parseInt(r.done) };
 }
 
-// Mark a batch of leads with their batchEnrichRunId
+// Mark a batch of leads with their batchEnrichRunId.
+// Also resets enrichedAt and contacts so a re-run doesn't skip them instantly.
 async function markBatchLeads(leadIds, batchRunId) {
   await ensureTable();
   await getPool().query(
-    `UPDATE leads SET "batchEnrichRunId" = $1 WHERE id = ANY($2::text[])`,
+    `UPDATE leads SET "batchEnrichRunId" = $1, "enrichedAt" = NULL, contacts = '[]'
+     WHERE id = ANY($2::text[])`,
     [batchRunId, leadIds]
   );
 }
