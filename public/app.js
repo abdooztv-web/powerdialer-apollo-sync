@@ -537,50 +537,115 @@ function renderActiveList() {
   updateBulkBar();
 }
 
+// ── BATCH ENRICH — one Apify run for all churches ────────────
+let batchRunId = null;
+let batchPollTimer = null;
+
 async function runBulkEnrich() {
   if (bulkEnrichRunning) return;
-  const toEnrich = currentLeads.filter(
-    l => l.hasWebsite && l.website && (!l.contacts || (Array.isArray(l.contacts) ? l.contacts.length === 0 : l.contacts === '[]' || l.contacts === 'null'))
-  );
-  if (!toEnrich.length) {
-    alert('All website leads already have staff data, or no website leads found.');
-    return;
-  }
   bulkEnrichRunning = true;
-  bulkEnrichCancelled = false;
-  const btn = document.getElementById('btnBulkEnrich');
+
+  const btn       = document.getElementById('btnBulkEnrich');
   const cancelBtn = document.getElementById('btnBulkCancel');
-  const sub = document.getElementById('bulkEnrichSub');
-  btn.disabled = true;
-  btn.textContent = `⏳ Running… 0 / ${toEnrich.length}`;
+  const sub       = document.getElementById('bulkEnrichSub');
+  const progress  = document.getElementById('batchProgress');
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ Starting…';
   if (cancelBtn) cancelBtn.style.display = '';
-  let done = 0; let found = 0;
-  for (const lead of toEnrich) {
-    if (bulkEnrichCancelled) break;
-    try {
-      const res = await fetch('/api/scraper/enrich/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id }),
-      });
-      const data = await res.json();
-      if (data.success && data.contactCount > 0) found++;
-    } catch { /* continue */ }
-    done++;
-    btn.textContent = `⏳ ${done} / ${toEnrich.length} done`;
-    if (sub) sub.textContent = `${done} churches searched · ${found} pastors found so far…`;
-    if (!bulkEnrichCancelled) await new Promise(r => setTimeout(r, 1500));
+
+  try {
+    // Start ONE batch Apify run for all website leads
+    const res  = await fetch('/api/scraper/enrich/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await res.json();
+
+    if (!data.success) {
+      alert(data.error || 'Batch start failed');
+      resetBulkBtn();
+      return;
+    }
+
+    batchRunId = data.batchRunId;
+    const total = data.leadCount;
+
+    if (sub) sub.textContent = `Apify crawling ${total} church websites (${data.urlCount} pages) in parallel…`;
+    if (progress) { progress.style.display = ''; updateBatchProgress(0, total, 'crawling'); }
+    btn.textContent = `🕷 Crawling ${total} churches…`;
+
+    // Poll batch status every 5 seconds
+    batchPollTimer = setInterval(() => pollBatchStatus(total), 5000);
+
+  } catch (err) {
+    alert('Batch enrich error: ' + err.message);
+    resetBulkBtn();
   }
+}
+
+async function pollBatchStatus(total) {
+  if (!batchRunId) return;
+  try {
+    const res  = await fetch('/api/scraper/enrich/batch/status/' + batchRunId);
+    const data = await res.json();
+
+    const btn      = document.getElementById('btnBulkEnrich');
+    const sub      = document.getElementById('bulkEnrichSub');
+    const progress = document.getElementById('batchProgress');
+    const done     = data.done  || 0;
+    const tot      = data.total || total || 1;
+
+    if (data.status === 'CRAWLING') {
+      if (btn) btn.textContent = `🕷 Apify crawling… (${done}/${tot} processed)`;
+      if (sub) sub.textContent = `Apify is visiting all church websites in parallel. This takes 2–4 minutes…`;
+      updateBatchProgress(done, tot, 'crawling');
+
+    } else if (data.status === 'PROCESSING') {
+      if (btn) btn.textContent = `🤖 Claude reading… ${done}/${tot}`;
+      if (sub) sub.textContent = `Claude is extracting pastor contacts from each church. ${tot - done} remaining…`;
+      updateBatchProgress(done, tot, 'processing');
+      // Each poll processes 8 leads — keep polling fast
+    } else if (data.status === 'DONE') {
+      clearInterval(batchPollTimer);
+      batchPollTimer = null;
+      batchRunId     = null;
+      if (progress) progress.style.display = 'none';
+      resetBulkBtn();
+      await fetchLeads();
+      fetchScraperStats();
+      alert(`✅ Done! Processed ${done} churches. Check the Decision Makers list for all extracted contacts.`);
+
+    } else if (data.status === 'ERROR') {
+      clearInterval(batchPollTimer);
+      batchPollTimer = null;
+      batchRunId     = null;
+      if (progress) progress.style.display = 'none';
+      resetBulkBtn();
+      alert('Batch enrichment failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch {
+    // network hiccup — keep polling
+  }
+}
+
+function updateBatchProgress(done, total, phase) {
+  const bar   = document.getElementById('batchProgressBar');
+  const label = document.getElementById('batchProgressLabel');
+  if (!bar || !label) return;
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  bar.style.width = pct + '%';
+  const phaseLabel = phase === 'crawling'    ? '🕷 Apify crawling websites…'
+                   : phase === 'processing'  ? '🤖 Claude extracting contacts…'
+                   : '✅ Done';
+  label.textContent = `${phaseLabel} ${done}/${total} churches · ${pct}%`;
+}
+
+function resetBulkBtn() {
   bulkEnrichRunning = false;
+  const btn       = document.getElementById('btnBulkEnrich');
+  const cancelBtn = document.getElementById('btnBulkCancel');
+  const sub       = document.getElementById('bulkEnrichSub');
+  if (btn)       { btn.disabled = false; btn.textContent = '▶ Find Staff for All'; }
   if (cancelBtn) cancelBtn.style.display = 'none';
-  btn.disabled = false;
-  btn.textContent = '▶ Find Staff for All';
-  if (sub) sub.textContent = 'Visits each church website and extracts pastor name, title, phone, and email automatically.';
-  await fetchLeads();
-  fetchScraperStats();
-  const doneMsg = bulkEnrichCancelled
-    ? `Cancelled. Processed ${done} of ${toEnrich.length} churches. Found staff at ${found}.`
-    : `Done! Searched ${done} churches. Found staff at ${found}. Check the Decision Makers list.`;
-  alert(doneMsg);
+  if (sub)       sub.textContent = 'Apify visits all church websites in parallel and Claude extracts pastor name, phone, and email.';
 }
 
 // ── ENRICH METHOD TOGGLE ─────────────────────────────────────

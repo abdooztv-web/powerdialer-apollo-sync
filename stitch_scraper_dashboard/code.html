@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>My Lists | Precision Engine</title>
+<!-- Google Fonts -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Manrope:wght@600;700;800&amp;display=swap" rel="stylesheet"/>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary-fixed": "#dbe1ff",
+              "tertiary-container": "#131b2e",
+              "surface-tint": "#0053db",
+              "on-secondary-fixed": "#0d1c2e",
+              "on-primary-fixed": "#00174b",
+              "surface-container-lowest": "#ffffff",
+              "secondary-container": "#d5e3fc",
+              "on-background": "#191c1e",
+              "surface-container-high": "#e6e8ea",
+              "primary-fixed-dim": "#b4c5ff",
+              "on-tertiary-fixed-variant": "#3f465c",
+              "surface-bright": "#f7f9fb",
+              "on-secondary": "#ffffff",
+              "background": "#f7f9fb",
+              "secondary-fixed-dim": "#b9c7df",
+              "surface-dim": "#d8dadc",
+              "on-secondary-fixed-variant": "#3a485b",
+              "on-tertiary-container": "#7c839b",
+              "primary-container": "#00174b",
+              "on-primary-fixed-variant": "#003ea8",
+              "tertiary-fixed": "#dae2fd",
+              "on-primary": "#ffffff",
+              "outline": "#76777d",
+              "secondary-fixed": "#d5e3fc",
+              "outline-variant": "#c6c6cd",
+              "on-secondary-container": "#57657a",
+              "on-surface": "#191c1e",
+              "surface": "#f7f9fb",
+              "inverse-primary": "#b4c5ff",
+              "surface-container": "#eceef0",
+              "on-error-container": "#93000a",
+              "tertiary": "#000000",
+              "surface-container-highest": "#e0e3e5",
+              "error-container": "#ffdad6",
+              "tertiary-fixed-dim": "#bec6e0",
+              "on-tertiary": "#ffffff",
+              "primary": "#000000",
+              "error": "#ba1a1a",
+              "on-tertiary-fixed": "#131b2e",
+              "inverse-on-surface": "#eff1f3",
+              "surface-container-low": "#f2f4f6",
+              "on-error": "#ffffff",
+              "on-surface-variant": "#45464d",
+              "inverse-surface": "#2d3133",
+              "surface-variant": "#e0e3e5",
+              "secondary": "#515f74",
+              "on-primary-container": "#497cff"
+            },
+            fontFamily: {
+              "headline": ["Manrope"],
+              "body": ["Inter"],
+              "label": ["Inter"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; }
+        h1, h2, h3 { font-family: 'Manrope', sans-serif; }
+    </style>
+</head>
+<body class="bg-background text-on-surface min-h-screen">
+<!-- SideNavBar Anchor -->
+<aside class="h-screen w-64 fixed left-0 top-0 border-r border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-950 flex flex-col h-full p-4 gap-2 z-50">
+<div class="flex items-center gap-3 mb-8 px-2">
+<div class="w-10 h-10 bg-primary flex items-center justify-center rounded-lg">
+<span class="material-symbols-outlined text-white" data-icon="precision_manufacturing">precision_manufacturing</span>
+</div>
+<div>
+<p class="text-lg font-black text-slate-900 dark:text-white leading-tight">Precision Engine</p>
+<p class="text-[10px] uppercase tracking-widest text-on-surface-variant font-bold">Lead Automation</p>
+</div>
+</div>
+<nav class="flex flex-col gap-1 flex-1">
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-900/50 hover:translate-x-1 transition-transform duration-200 font-manrope text-sm font-medium" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="search_check">search_check</span>
+<span>Scraper</span>
+</a>
+<!-- Active State Logic: My Lists -->
+<a class="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-slate-900 text-blue-600 dark:text-blue-400 font-bold rounded-lg shadow-sm font-manrope text-sm" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="list_alt">list_alt</span>
+<span>My Lists</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-900/50 hover:translate-x-1 transition-transform duration-200 font-manrope text-sm font-medium" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="analytics">analytics</span>
+<span>Results</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-900/50 hover:translate-x-1 transition-transform duration-200 font-manrope text-sm font-medium" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="api">api</span>
+<span>API Integrations</span>
+</a>
+</nav>
+<div class="mt-auto flex flex-col gap-1 pt-4 border-t border-slate-200/50">
+<a class="flex items-center gap-3 px-3 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 font-manrope text-sm font-medium" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="help">help</span>
+<span>Documentation</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-200 font-manrope text-sm font-medium" href="#">
+<span class="material-symbols-outlined text-lg" data-icon="contact_support">contact_support</span>
+<span>Support</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="ml-64 min-h-screen">
+<!-- TopAppBar Anchor -->
+<header class="w-full border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex justify-between items-center px-8 h-16 sticky top-0 z-40">
+<div class="flex items-center gap-8">
+<h1 class="text-xl font-bold text-slate-900 dark:text-white tracking-tighter">My Lists</h1>
+<div class="relative flex items-center">
+<span class="material-symbols-outlined absolute left-3 text-outline text-lg" data-icon="search">search</span>
+<input class="bg-surface-container-low border-none rounded-full pl-10 pr-4 py-1.5 text-sm w-64 focus:ring-2 focus:ring-surface-tint/20 transition-all placeholder:text-on-tertiary-container" placeholder="Filter lead batches..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 mr-4">
+<a class="text-slate-500 hover:text-blue-600 font-manrope text-sm font-semibold transition-colors" href="#">Projects</a>
+<a class="text-slate-500 hover:text-blue-600 font-manrope text-sm font-semibold transition-colors" href="#">Team</a>
+<a class="text-slate-500 hover:text-blue-600 font-manrope text-sm font-semibold transition-colors" href="#">Billing</a>
+</div>
+<button class="w-10 h-10 flex items-center justify-center text-slate-500 hover:bg-slate-200 rounded-full transition-all">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-primary-container overflow-hidden ring-2 ring-white">
+<img alt="User profile avatar" class="w-full h-full object-cover" data-alt="close-up portrait of a professional male in his 30s with short hair and glasses wearing a business casual shirt in soft studio lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBJGnr4p7E1oVG7dz6lb53CB5heaMRn29Hd9hw7aAkJ3-dCQWLdlf0g-I2fttqHADJOfmQ-NR3W9ldCH0KvunIagXAUzBB0Kgt6cZgq96Qx_8FjGAJq5fedC1oZuPF8R-U0bwLHXWZGV28CI7mR5q5_eN1OWuDGLsPom93CKTCfXRa2nh6pMydRea8pB1V6m8jWbVugUbtT22sLgKEYWsETbC9ukJVM6XKoBZDddS-BhMpx1rRA93_-Z9m7joHL917ZmRvzQFjr94PK"/>
+</div>
+</div>
+</header>
+<section class="p-10 max-w-7xl mx-auto">
+<!-- Asymmetric Header Section -->
+<div class="flex justify-between items-end mb-12">
+<div class="max-w-xl">
+<h2 class="text-4xl font-extrabold text-on-surface tracking-tight mb-4">Architectural Ledger</h2>
+<p class="text-on-surface-variant font-body text-lg leading-relaxed">
+                        Access your curated lead environments. Every batch is calibrated for high-intent outreach and data integrity.
+                    </p>
+</div>
+<button class="bg-primary text-white px-8 py-3 rounded-full font-label text-sm font-bold tracking-widest flex items-center gap-2 hover:bg-primary-container transition-all active:scale-95 shadow-lg shadow-primary/10">
+<span class="material-symbols-outlined text-lg" data-icon="add">add</span>
+                    NEW SCRAPE
+                </button>
+</div>
+<!-- Bento Grid List Layout -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- Featured Active List (Wide) -->
+<div class="md:col-span-8 bg-surface-container-lowest p-8 rounded-xl shadow-sm group hover:shadow-md transition-shadow relative overflow-hidden">
+<div class="absolute top-0 right-0 w-32 h-32 bg-primary-container/5 rounded-full -mr-16 -mt-16 transition-transform group-hover:scale-110"></div>
+<div class="flex justify-between items-start mb-6">
+<div class="flex items-center gap-2 px-3 py-1 bg-on-primary-container/10 text-on-primary-container rounded-full">
+<span class="material-symbols-outlined text-sm" data-icon="verified" style="font-variation-settings: 'FILL' 1;">verified</span>
+<span class="text-[10px] font-black uppercase tracking-widest">Active Batch</span>
+</div>
+<div class="flex gap-2">
+<button class="p-2 hover:bg-surface-container-high rounded-lg text-outline transition-colors"><span class="material-symbols-outlined text-xl" data-icon="edit">edit</span></button>
+<button class="p-2 hover:bg-surface-container-high rounded-lg text-outline transition-colors"><span class="material-symbols-outlined text-xl" data-icon="more_vert">more_vert</span></button>
+</div>
+</div>
+<h3 class="text-2xl font-bold mb-2">NYC Fintech Founders</h3>
+<p class="text-on-surface-variant text-sm font-body mb-8">Series A+ founders in Manhattan and Brooklyn with recent funding rounds.</p>
+<div class="grid grid-cols-3 gap-4 mb-8">
+<div class="bg-surface-container-low p-4 rounded-lg">
+<p class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Leads</p>
+<p class="text-2xl font-black text-primary">1,284</p>
+</div>
+<div class="bg-surface-container-low p-4 rounded-lg">
+<p class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Created</p>
+<p class="text-lg font-bold">Oct 12, 2023</p>
+</div>
+<div class="bg-surface-container-low p-4 rounded-lg">
+<p class="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest mb-1">Source</p>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-blue-600 text-lg" data-icon="map">map</span>
+<span class="text-sm font-bold">Google Maps</span>
+</div>
+</div>
+</div>
+<button class="w-full bg-primary text-white py-4 rounded-lg font-label font-bold tracking-widest hover:bg-primary-container transition-all flex items-center justify-center gap-3">
+                        OPEN DATASET
+                        <span class="material-symbols-outlined" data-icon="arrow_forward">arrow_forward</span>
+</button>
+</div>
+<!-- Secondary List Item (Standard) -->
+<div class="md:col-span-4 bg-surface-container-low p-6 rounded-xl flex flex-col justify-between border border-transparent hover:border-outline-variant/30 transition-all">
+<div>
+<div class="flex justify-between items-center mb-4">
+<div class="flex items-center gap-2 text-on-tertiary-container">
+<span class="material-symbols-outlined text-lg" data-icon="cloud_done">cloud_done</span>
+<span class="text-[10px] font-bold uppercase tracking-widest">Archived</span>
+</div>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-on-surface transition-colors" data-icon="delete">delete</span>
+</div>
+<h3 class="text-xl font-bold mb-2">London Agency Directors</h3>
+<p class="text-on-surface-variant text-xs font-body mb-6">Marketing and PR agencies within Greater London area.</p>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between items-center border-t border-outline-variant/20 pt-4">
+<span class="text-xs text-on-surface-variant">450 Leads</span>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-sm text-on-tertiary-container" data-icon="database">database</span>
+<span class="text-[10px] font-bold">Apify</span>
+</div>
+</div>
+<button class="w-full py-2 bg-white rounded-lg text-primary text-[10px] font-black uppercase tracking-widest border border-outline-variant/10 hover:shadow-sm transition-all">View Batch</button>
+</div>
+</div>
+<!-- Row 2 -->
+<div class="md:col-span-4 bg-surface-container-low p-6 rounded-xl flex flex-col justify-between hover:bg-surface-container transition-colors">
+<div>
+<div class="flex justify-between items-center mb-4">
+<div class="flex items-center gap-2 text-on-tertiary-container">
+<span class="material-symbols-outlined text-lg" data-icon="sync" style="font-variation-settings: 'FILL' 0;">sync</span>
+<span class="text-[10px] font-bold uppercase tracking-widest">Processing</span>
+</div>
+</div>
+<h3 class="text-xl font-bold mb-2">SF AI Engineers</h3>
+<p class="text-on-surface-variant text-xs font-body mb-6">LinkedIn export from specific technical groups.</p>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between items-center border-t border-outline-variant/20 pt-4">
+<span class="text-xs text-on-surface-variant">Scanning...</span>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-sm text-on-tertiary-container" data-icon="link">link</span>
+<span class="text-[10px] font-bold">API</span>
+</div>
+</div>
+<div class="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
+<div class="h-full bg-on-primary-container w-[65%] rounded-full animate-pulse"></div>
+</div>
+</div>
+</div>
+<div class="md:col-span-4 bg-surface-container-low p-6 rounded-xl flex flex-col justify-between">
+<div>
+<div class="flex justify-between items-center mb-4">
+<div class="flex items-center gap-2 text-on-tertiary-container">
+<span class="material-symbols-outlined text-lg" data-icon="check_circle">check_circle</span>
+<span class="text-[10px] font-bold uppercase tracking-widest">Complete</span>
+</div>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-on-surface" data-icon="more_horiz">more_horiz</span>
+</div>
+<h3 class="text-xl font-bold mb-2">Berlin SaaS Founders</h3>
+<p class="text-on-surface-variant text-xs font-body mb-6">Bootstrapped and VC backed companies.</p>
+</div>
+<div class="space-y-3">
+<div class="flex justify-between items-center border-t border-outline-variant/20 pt-4">
+<span class="text-xs text-on-surface-variant">892 Leads</span>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-sm text-on-tertiary-container" data-icon="map">map</span>
+<span class="text-[10px] font-bold">G-Maps</span>
+</div>
+</div>
+<button class="w-full py-2 bg-white rounded-lg text-primary text-[10px] font-black uppercase tracking-widest hover:shadow-sm">View Batch</button>
+</div>
+</div>
+<!-- Statistics Card (Bento Fill) -->
+<div class="md:col-span-4 bg-primary text-white p-6 rounded-xl flex flex-col justify-center items-start relative overflow-hidden">
+<div class="absolute inset-0 bg-gradient-to-br from-primary to-primary-container opacity-50"></div>
+<div class="relative z-10">
+<p class="text-[10px] font-black uppercase tracking-[0.2em] opacity-60 mb-1">Total Assets</p>
+<h4 class="text-4xl font-black mb-4 tracking-tighter">4,812</h4>
+<p class="text-xs font-medium opacity-80 leading-relaxed max-w-[180px]">Lead objects currently active across all precision batches.</p>
+<div class="mt-6 flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full backdrop-blur-md">
+<span class="material-symbols-outlined text-sm" data-icon="trending_up">trending_up</span>
+<span class="text-[10px] font-bold tracking-widest">+12% THIS MONTH</span>
+</div>
+</div>
+<div class="absolute -bottom-8 -right-8 opacity-10">
+<span class="material-symbols-outlined text-[120px]" data-icon="bar_chart">bar_chart</span>
+</div>
+</div>
+<!-- More items can follow this pattern -->
+<div class="md:col-span-12 mt-4 text-center">
+<button class="text-on-surface-variant font-label text-[10px] font-black uppercase tracking-widest hover:text-primary transition-colors py-4 px-8 border border-outline-variant/20 rounded-lg hover:bg-surface-container-low">
+                        Load History (24 more batches)
+                    </button>
+</div>
+</div>
+</section>
+</main>
+<!-- Floating Action Button - Suprressed as per Rules for 'Lists' screens, but used as placeholder if needed elsewhere. Guidelines say: "suppress the FAB on Settings, Profile, Details, and Transactional screens." This is a list/dashboard view so it could stay, but we prioritize the header CTA. -->
+</body></html>

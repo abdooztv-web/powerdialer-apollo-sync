@@ -232,17 +232,28 @@
         <!-- Bulk Enrich Bar (only shown for Has Website list) -->
         <div class="bulk-enrich-bar" id="bulkEnrichBar" style="display:none">
           <div class="bulk-enrich-info">
-            <span class="bulk-enrich-icon">🔍</span>
+            <span class="bulk-enrich-icon">🕷</span>
             <div>
-              <div class="bulk-enrich-title">Find Decision Makers</div>
+              <div class="bulk-enrich-title">Batch Find Decision Makers</div>
               <div class="bulk-enrich-sub" id="bulkEnrichSub">
-                Visits each church website and extracts pastor name, title, phone, and email automatically.
+                Apify visits all church websites in parallel and Claude extracts pastor name, phone, and email.
               </div>
             </div>
           </div>
           <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
             <button class="btn-bulk-enrich" id="btnBulkEnrich">▶ Find Staff for All</button>
             <button class="btn-bulk-cancel" id="btnBulkCancel" style="display:none">✕ Cancel</button>
+          </div>
+        </div>
+
+        <!-- Batch Progress Bar (shown while batch is running) -->
+        <div class="batch-progress-card" id="batchProgress" style="display:none">
+          <div class="batch-progress-label" id="batchProgressLabel">🕷 Starting…</div>
+          <div class="batch-progress-track">
+            <div class="batch-progress-bar" id="batchProgressBar" style="width:0%"></div>
+          </div>
+          <div class="batch-progress-hint">
+            Phase 1: Apify crawls all websites simultaneously &nbsp;→&nbsp; Phase 2: Claude extracts contacts &nbsp;→&nbsp; Done
           </div>
         </div>
 

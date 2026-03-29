@@ -202,9 +202,126 @@ async function extractContactsFromDataset(datasetId, churchName) {
   return callClaudeForContacts(textChunks, churchName);
 }
 
+// ── BATCH MODE — one Apify run for ALL churches ───────────────
+
+/**
+ * Extract hostname from a URL for domain-based matching.
+ * e.g. "https://www.holytrinitychurch.org/staff" → "holytrinitychurch.org"
+ */
+function getDomain(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return (url || '').toLowerCase().replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+  }
+}
+
+/**
+ * Start ONE Apify run with ALL church website URLs at once.
+ * Each church gets: home + /staff + /about + /clergy + /contact + /leadership
+ * Apify crawls all of them in parallel — much faster than individual runs.
+ *
+ * @param {Array} leads - array of { id, website, name }
+ * @returns {{ batchRunId, datasetId, domainToLeadId }}
+ */
+async function startBatchEnrichCrawl(leads) {
+  const token = process.env.APIFY_API_TOKEN;
+  if (!token) throw new Error('APIFY_API_TOKEN is not set');
+
+  const BATCH_PATHS = ['/', '/staff', '/about', '/clergy', '/contact', '/leadership'];
+
+  // Build startUrls for all churches, deduplicated
+  const startUrls = [];
+  const domainToLeadId = {};
+
+  for (const lead of leads) {
+    const base = (lead.website || '').replace(/\/+$/, '');
+    if (!base) continue;
+    const domain = getDomain(base);
+    if (!domain) continue;
+    domainToLeadId[domain] = { leadId: lead.id, churchName: lead.name || '' };
+    for (const path of BATCH_PATHS) {
+      startUrls.push({ url: base + path });
+    }
+  }
+
+  if (!startUrls.length) throw new Error('No valid websites to crawl');
+
+  const input = {
+    startUrls,
+    maxCrawlDepth: 0,           // Only crawl exact URLs we provide — no link following
+    maxCrawlPages: startUrls.length + 50,
+    crawlerType: 'cheerio',     // Fastest + cheapest — handles static HTML
+    htmlTransformer: 'readableText',
+    readableTextCharThreshold: 80,
+    removeCookieWarnings: true,
+    proxyConfiguration: { useApifyProxy: false },
+  };
+
+  const res = await axios.post(
+    `${APIFY_BASE}/acts/${APIFY_ENRICH_ACTOR}/runs`,
+    input,
+    { headers: { ...apifyHeaders(), 'Content-Type': 'application/json' } }
+  );
+
+  const run = res.data.data;
+  return { batchRunId: run.id, datasetId: run.defaultDatasetId, domainToLeadId };
+}
+
+/**
+ * Fetch ALL items from an Apify dataset.
+ * Returns array of { url, text, markdown }
+ */
+async function fetchAllDatasetItems(datasetId) {
+  const res = await axios.get(
+    `${APIFY_BASE}/datasets/${datasetId}/items`,
+    {
+      headers: apifyHeaders(),
+      params: { format: 'json', clean: true, limit: 2000 },
+    }
+  );
+  return res.data || [];
+}
+
+/**
+ * Group Apify dataset items by their domain.
+ * Returns { 'holytrinitychurch.org': [ ...items ], ... }
+ */
+function groupItemsByDomain(items) {
+  const groups = {};
+  for (const item of items) {
+    const domain = getDomain(item.url || '');
+    if (!domain) continue;
+    if (!groups[domain]) groups[domain] = [];
+    groups[domain].push(item);
+  }
+  return groups;
+}
+
+/**
+ * Extract contacts from Apify items for a single church.
+ * Combines text from all its pages, sends to Claude.
+ */
+async function extractContactsForChurch(items, churchName) {
+  const combined = items
+    .filter(i => i.text || i.markdown)
+    .map(i => `--- ${i.url || ''} ---\n${(i.text || i.markdown || '').slice(0, 1400)}`)
+    .join('\n\n')
+    .slice(0, 12000);
+
+  if (!combined.trim()) return [];
+  return callClaudeForContacts(combined, churchName);
+}
+
 module.exports = {
   enrichWebsite,
   startEnrichCrawl,
   getEnrichStatus,
   extractContactsFromDataset,
+  // Batch exports
+  startBatchEnrichCrawl,
+  fetchAllDatasetItems,
+  groupItemsByDomain,
+  extractContactsForChurch,
+  getDomain,
 };

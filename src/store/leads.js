@@ -52,7 +52,9 @@ async function initTable() {
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "pushedAt" TIMESTAMPTZ`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "pushedToSequence" TEXT`);
     await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "apolloContactId" TEXT`);
-    await client.query(`CREATE INDEX IF NOT EXISTS leads_scrape_run_idx ON leads("scrapeRunId")`)
+    await client.query(`ALTER TABLE leads ADD COLUMN IF NOT EXISTS "batchEnrichRunId" TEXT`);
+    await client.query(`CREATE INDEX IF NOT EXISTS leads_scrape_run_idx ON leads("scrapeRunId")`);
+    await client.query(`CREATE INDEX IF NOT EXISTS leads_batch_enrich_idx ON leads("batchEnrichRunId")`)
   } finally {
     client.release();
   }
@@ -182,4 +184,26 @@ async function exportCSV(filters = {}) {
   return [headers.join(','), ...rows].join('\n');
 }
 
-module.exports = { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult };
+// Get progress for a batch enrich run
+async function getBatchProgress(batchRunId) {
+  await ensureTable();
+  const res = await getPool().query(
+    `SELECT COUNT(*) as total,
+            COUNT(*) FILTER (WHERE "enrichedAt" IS NOT NULL) as done
+     FROM leads WHERE "batchEnrichRunId" = $1`,
+    [batchRunId]
+  );
+  const r = res.rows[0];
+  return { total: parseInt(r.total), done: parseInt(r.done) };
+}
+
+// Mark a batch of leads with their batchEnrichRunId
+async function markBatchLeads(leadIds, batchRunId) {
+  await ensureTable();
+  await getPool().query(
+    `UPDATE leads SET "batchEnrichRunId" = $1 WHERE id = ANY($2::text[])`,
+    [batchRunId, leadIds]
+  );
+}
+
+module.exports = { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads };

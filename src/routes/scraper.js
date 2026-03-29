@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
-const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
-const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult } = require('../store/leads');
+const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset,
+        startBatchEnrichCrawl, fetchAllDatasetItems, groupItemsByDomain, extractContactsForChurch, getDomain } = require('../enrichment/websiteEnricher');
+const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
 
@@ -13,6 +14,10 @@ const activeJobs = new Map();
 // Active Apify enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
 // Note: used only for same-instance polling; DB is the source of truth for completion
 const enrichJobs = new Map();
+
+// Batch enrich jobs: batchRunId -> { domainToLeadId, datasetId, status, items? }
+// domainToLeadId: { 'church.org': { leadId, churchName } }
+const batchJobs = new Map();
 
 
 function fallbackScore(lead) {
@@ -311,6 +316,161 @@ router.get('/enrich/status/:enrichRunId', async (req, res) => {
     return res.json({ success: true, status: memStatus });
 
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/scraper/enrich/batch
+// Starts ONE Apify run crawling ALL church websites simultaneously.
+// Body: { leadIds? } — if omitted, uses all leads with websites and no contacts yet.
+router.post('/enrich/batch', async (req, res) => {
+  try {
+    if (!process.env.APIFY_API_TOKEN) {
+      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+    }
+
+    // Fetch all leads with websites and no contacts yet
+    const { leads: allLeads } = await getLeads({ hasWebsite: 'true', limit: 2000 });
+    const toEnrich = allLeads.filter(l => {
+      if (!l.website) return false;
+      const c = l.contacts;
+      if (!c) return true;
+      if (Array.isArray(c)) return c.length === 0;
+      if (typeof c === 'string') {
+        try { return JSON.parse(c).length === 0; } catch { return true; }
+      }
+      return true;
+    });
+
+    if (!toEnrich.length) {
+      return res.json({ success: false, error: 'No website leads without contacts found. All done!' });
+    }
+
+    logger.info('Starting batch enrich', { count: toEnrich.length });
+
+    const { batchRunId, datasetId, domainToLeadId } = await startBatchEnrichCrawl(toEnrich);
+
+    // Store the domain→lead mapping in memory and in DB
+    batchJobs.set(batchRunId, {
+      domainToLeadId,
+      datasetId,
+      status: 'RUNNING',
+      total: toEnrich.length,
+      startedAt: new Date().toISOString(),
+    });
+
+    // Mark all included leads with this batchRunId in DB (for progress tracking)
+    await markBatchLeads(toEnrich.map(l => l.id), batchRunId);
+
+    const urlCount = Object.keys(domainToLeadId).length * 6; // 6 paths per church
+    logger.info('Batch enrich started', { batchRunId, leads: toEnrich.length, urls: urlCount });
+
+    res.json({
+      success: true,
+      batchRunId,
+      leadCount: toEnrich.length,
+      urlCount,
+      message: `Apify is crawling ${toEnrich.length} church websites (${urlCount} pages) in parallel`,
+    });
+  } catch (err) {
+    logger.error('Batch enrich start failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/scraper/enrich/batch/status/:batchRunId
+// Polls Apify. When SUCCEEDED, processes churches in chunks of 8 per request.
+// Each poll call processes 8 more churches — distributes work to avoid Vercel timeouts.
+router.get('/enrich/batch/status/:batchRunId', async (req, res) => {
+  const { batchRunId } = req.params;
+  try {
+    // Get DB progress first — source of truth for how many are done
+    const { total, done } = await getBatchProgress(batchRunId);
+
+    // If all done per DB
+    if (total > 0 && done >= total) {
+      if (batchJobs.has(batchRunId)) {
+        batchJobs.set(batchRunId, { ...batchJobs.get(batchRunId), status: 'DONE' });
+      }
+      return res.json({ success: true, status: 'DONE', total, done, found: done });
+    }
+
+    // Get or reconstruct job from memory
+    let job = batchJobs.get(batchRunId);
+
+    // Check Apify run status
+    const apifyStatus = await getEnrichStatus(batchRunId);
+
+    if (apifyStatus.status === 'RUNNING' || apifyStatus.status === 'READY') {
+      return res.json({ success: true, status: 'CRAWLING', total, done, apifyStatus: apifyStatus.status });
+    }
+
+    if (apifyStatus.status === 'FAILED' || apifyStatus.status === 'ABORTED') {
+      return res.json({ success: true, status: 'ERROR', error: 'Apify run ' + apifyStatus.status, total, done });
+    }
+
+    if (apifyStatus.status === 'SUCCEEDED') {
+      // Fetch dataset items once and cache in memory
+      if (!job || !job.items) {
+        const items = await fetchAllDatasetItems(apifyStatus.datasetId || (job && job.datasetId));
+        const itemsByDomain = groupItemsByDomain(items);
+        const existing = job || { domainToLeadId: {}, total, status: 'SUCCEEDED' };
+        job = { ...existing, items, itemsByDomain, status: 'PROCESSING' };
+        batchJobs.set(batchRunId, job);
+        logger.info('Batch dataset fetched', { batchRunId, itemCount: items.length, domains: Object.keys(itemsByDomain).length });
+      }
+
+      // Find leads NOT yet enriched in this batch (query DB)
+      const { leads: batchLeads } = await getLeads({ limit: 2000 });
+      const pending = batchLeads.filter(l =>
+        l.batchEnrichRunId === batchRunId && !l.enrichedAt
+      );
+
+      if (!pending.length) {
+        batchJobs.set(batchRunId, { ...job, status: 'DONE' });
+        return res.json({ success: true, status: 'DONE', total, done, found: done });
+      }
+
+      // Process next chunk of 8 leads (stays under Vercel timeout)
+      const chunk = pending.slice(0, 8);
+      const itemsByDomain = job.itemsByDomain || {};
+
+      await Promise.all(chunk.map(async lead => {
+        try {
+          const domain = getDomain(lead.website || '');
+          const churchItems = itemsByDomain[domain] || [];
+          const contacts = churchItems.length
+            ? await extractContactsForChurch(churchItems, lead.name)
+            : [];
+          await updateLead(lead.id, {
+            contacts: JSON.stringify(contacts),
+            enrichedAt: new Date().toISOString(),
+          });
+          logger.info('Batch: church enriched', { leadId: lead.id, domain, contactCount: contacts.length });
+        } catch (err) {
+          // Mark as done even on error so it doesn't block progress
+          await updateLead(lead.id, { enrichedAt: new Date().toISOString(), contacts: '[]' });
+          logger.warn('Batch: church enrich failed', { leadId: lead.id, error: err.message });
+        }
+      }));
+
+      const newDone = done + chunk.length;
+      const stillPending = pending.length - chunk.length;
+
+      return res.json({
+        success: true,
+        status: stillPending > 0 ? 'PROCESSING' : 'DONE',
+        total,
+        done: newDone,
+        pending: stillPending,
+      });
+    }
+
+    // Apify still in another state
+    return res.json({ success: true, status: 'CRAWLING', total, done, apifyStatus: apifyStatus.status });
+
+  } catch (err) {
+    logger.error('Batch status failed', { batchRunId, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });

@@ -1542,3 +1542,37 @@ h1, h2, h3, .display {
 }
 .dm-contact-missing:last-child { border-bottom: none; }
 .dm-contact-missing::before { content: '—'; width: 20px; text-align: center; flex-shrink: 0; }
+
+/* ── BATCH PROGRESS CARD ──────────────────── */
+.batch-progress-card {
+  background: var(--surface-card);
+  border: 1.5px solid var(--accent-light);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+.batch-progress-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+  font-family: 'Manrope', sans-serif;
+}
+.batch-progress-track {
+  height: 8px;
+  background: var(--surface-high);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+.batch-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #0053db, #16a34a);
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+.batch-progress-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
