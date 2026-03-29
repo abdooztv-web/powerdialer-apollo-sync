@@ -156,14 +156,11 @@ async function startEnrichCrawl(website) {
 
   const input = {
     startUrls,
-    maxCrawlDepth: 1,          // Only crawl the pages we specify + their direct links
+    maxCrawlDepth: 1,
     maxCrawlPages: 12,
-    crawlerType: 'cheerio',    // Fastest + cheapest Apify option
-    removeCookieWarnings: true,
-    clickElementsCssSelector: null,
-    htmlTransformer: 'readableText', // Returns clean plain text
+    crawlerType: 'cheerio',
+    htmlTransformer: 'readableText',
     readableTextCharThreshold: 100,
-    proxyConfiguration: { useApifyProxy: false },
   };
 
   const res = await axios.post(
@@ -249,13 +246,11 @@ async function startBatchEnrichCrawl(leads) {
 
   const input = {
     startUrls,
-    maxCrawlDepth: 0,           // Only crawl exact URLs we provide — no link following
+    maxCrawlDepth: 0,
     maxCrawlPages: startUrls.length + 50,
-    crawlerType: 'cheerio',     // Fastest + cheapest — handles static HTML
+    crawlerType: 'cheerio',
     htmlTransformer: 'readableText',
     readableTextCharThreshold: 80,
-    removeCookieWarnings: true,
-    proxyConfiguration: { useApifyProxy: false },
   };
 
   const res = await axios.post(
