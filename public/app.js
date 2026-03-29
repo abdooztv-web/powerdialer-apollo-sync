@@ -769,6 +769,9 @@ function initScraper() {
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
 
+  // Bulk delete
+  document.getElementById('btnBulkDelete').addEventListener('click', deleteSelected);
+
   // Export CSV
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
 
@@ -1111,6 +1114,7 @@ function renderLeadCards(leads) {
             <span class="score-badge ${scoreClass}">${scoreLabel}</span>
             ${!lead.hasWebsite ? '<span class="no-website-badge">No Website</span>' : ''}
           </div>
+          <button class="btn-delete-lead" data-action="delete-lead" data-lead-id="${esc(lead.id)}" title="Delete lead">🗑</button>
         </div>
         <div class="lead-meta">
           ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
@@ -1191,6 +1195,10 @@ function handleLeadAction(e) {
   if (action === 'find-staff') {
     startEnrich(leadId);
   }
+
+  if (action === 'delete-lead') {
+    deleteSingleLead(leadId);
+  }
 }
 
 function handleLeadCheckbox(e) {
@@ -1240,6 +1248,50 @@ async function skipSingleLead(leadId) {
     });
     setTimeout(() => { fetchLeads(); fetchScraperStats(); }, 600);
   } catch { /* silent */ }
+}
+
+async function deleteSingleLead(leadId) {
+  // Remove the card instantly from the DOM for snappy UX, then confirm in bg
+  const card = document.querySelector(`.lead-card[data-lead-id="${leadId}"]`);
+  if (card) card.remove();
+  selectedLeadIds.delete(leadId);
+  currentLeads = currentLeads.filter(l => l.id !== leadId);
+  updateBulkBar();
+  try {
+    await fetch('/api/scraper/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [leadId] }),
+    });
+    fetchScraperStats();
+  } catch { /* silent */ }
+}
+
+async function deleteSelected() {
+  if (!selectedLeadIds.size) return;
+  const ids = Array.from(selectedLeadIds);
+  const noun = ids.length === 1 ? '1 lead' : ids.length + ' leads';
+  if (!confirm(`Permanently delete ${noun}? This cannot be undone.`)) return;
+  // Remove from DOM immediately
+  ids.forEach(id => {
+    const card = document.querySelector(`.lead-card[data-lead-id="${id}"]`);
+    if (card) card.remove();
+  });
+  currentLeads = currentLeads.filter(l => !selectedLeadIds.has(l.id));
+  selectedLeadIds.clear();
+  updateBulkBar();
+  try {
+    await fetch('/api/scraper/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    fetchLeads();
+    fetchScraperStats();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+    fetchLeads();
+  }
 }
 
 function setLeadState(leadId, state, msg) {

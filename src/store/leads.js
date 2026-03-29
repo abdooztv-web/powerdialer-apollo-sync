@@ -206,4 +206,14 @@ async function markBatchLeads(leadIds, batchRunId) {
   );
 }
 
-module.exports = { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads };
+async function deleteLeads(ids) {
+  if (!ids || !ids.length) return 0;
+  await ensureTable();
+  const res = await getPool().query(
+    `DELETE FROM leads WHERE id = ANY($1::text[])`,
+    [ids]
+  );
+  return res.rowCount;
+}
+
+module.exports = { saveLeads, getLeads, updateLead, deleteLeads, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads };

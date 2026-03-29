@@ -4,7 +4,7 @@ const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers
 const { scoreLeads } = require('../enrichment/scorer');
 const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset,
         startBatchEnrichCrawl, fetchAllDatasetItems, groupItemsByDomain, extractContactsForChurch, getDomain } = require('../enrichment/websiteEnricher');
-const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
+const { saveLeads, getLeads, updateLead, deleteLeads, getStats, exportCSV, generateId, getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
 
@@ -223,6 +223,21 @@ router.post('/skip', async (req, res) => {
   const { ids = [] } = req.body;
   await Promise.all(ids.map(id => updateLead(id, { status: 'skipped' })));
   res.json({ success: true, skipped: ids.length });
+});
+
+// POST /api/scraper/delete
+// Body: { ids: string[] }  — permanently removes leads from DB
+router.post('/delete', async (req, res) => {
+  const { ids = [] } = req.body;
+  if (!ids.length) return res.status(400).json({ success: false, error: 'No IDs provided' });
+  try {
+    const count = await deleteLeads(ids);
+    logger.info('Leads deleted', { count, ids: ids.slice(0, 5) });
+    res.json({ success: true, deleted: count });
+  } catch (err) {
+    logger.error('Delete leads failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // POST /api/scraper/enrich/start
