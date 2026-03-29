@@ -583,33 +583,83 @@ async function runBulkEnrich() {
   alert(doneMsg);
 }
 
-// ── ENRICH: DIRECT WEBSITE FETCH (no Apify, synchronous) ─────
+// ── ENRICH METHOD TOGGLE ─────────────────────────────────────
+let enrichMethod = 'claude'; // 'claude' | 'apify'
+
+function initEnrichMethodToggle() {
+  const toggle = document.getElementById('enrichMethodToggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', e => {
+    const btn = e.target.closest('.method-btn');
+    if (!btn) return;
+    toggle.querySelectorAll('.method-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    enrichMethod = btn.dataset.method;
+  });
+}
+
+// ── ENRICH: START + POLL (claude=sync, apify=async poll) ──────
 async function startEnrich(leadId) {
-  // Mark as crawling in the UI immediately
   enrichPollers.set(leadId, { enrichRunId: 'pending', intervalId: null });
-  renderLeadCards(currentLeads);
+  renderActiveList();
 
   try {
     const res = await fetch('/api/scraper/enrich/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leadId }),
+      body: JSON.stringify({ leadId, method: enrichMethod }),
     });
     const data = await res.json();
 
-    enrichPollers.delete(leadId);
-
     if (!data.success) {
+      enrichPollers.delete(leadId);
+      renderActiveList();
       alert('Enrich failed: ' + data.error);
       return;
     }
 
-    // Backend is synchronous now — contacts come back immediately
-    fetchLeads();
-    fetchScraperStats();
+    if (data.status === 'DONE') {
+      // Claude direct mode — contacts already saved, refresh immediately
+      enrichPollers.delete(leadId);
+      fetchLeads();
+      fetchScraperStats();
+      return;
+    }
+
+    if (data.status === 'RUNNING' && data.enrichRunId) {
+      // Apify mode — start polling
+      const intervalId = setInterval(() => pollEnrichStatus(leadId, data.enrichRunId), 4000);
+      enrichPollers.set(leadId, { enrichRunId: data.enrichRunId, intervalId });
+      renderActiveList();
+    }
   } catch (err) {
     enrichPollers.delete(leadId);
+    renderActiveList();
     alert('Enrich error: ' + err.message);
+  }
+}
+
+async function pollEnrichStatus(leadId, enrichRunId) {
+  try {
+    const res = await fetch('/api/scraper/enrich/status/' + enrichRunId);
+    const data = await res.json();
+
+    if (data.status === 'DONE') {
+      const poller = enrichPollers.get(leadId);
+      if (poller && poller.intervalId) clearInterval(poller.intervalId);
+      enrichPollers.delete(leadId);
+      fetchLeads();
+      fetchScraperStats();
+    } else if (data.status === 'ERROR') {
+      const poller = enrichPollers.get(leadId);
+      if (poller && poller.intervalId) clearInterval(poller.intervalId);
+      enrichPollers.delete(leadId);
+      renderActiveList();
+      alert('Enrichment failed. Try Claude Direct mode instead.');
+    }
+    // RUNNING / PROCESSING — keep polling
+  } catch {
+    // network hiccup — keep polling
   }
 }
 
@@ -686,6 +736,9 @@ function initScraper() {
   // Event delegation on leads list
   document.getElementById('leadsList').addEventListener('click', handleLeadAction);
   document.getElementById('leadsList').addEventListener('change', handleLeadCheckbox);
+
+  // Enrich method toggle
+  initEnrichMethodToggle();
 
   // Fetch initial data when tab opens
   fetchLeads();
@@ -926,18 +979,33 @@ function renderLeadCards(leads) {
         : lead.status === 'skipped' ? `<span class="status-badge-skipped">Skipped</span>`
         : lead.status === 'error' ? `<span class="status-badge-error">Error</span>` : '';
 
-      // Staff panel — DM mode shows dm-contact-rows; others use staff directory
+      // Staff panel — DM mode shows contact cards; others use staff directory
       let staffPanel;
       if (activeListId === 'decision-makers') {
         let contacts = lead.contacts || [];
         if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
-        staffPanel = contacts.map(c => `
-          <div class="dm-contact-row">
-            <span class="dm-contact-name">${esc(c.name || '—')}</span>
-            ${c.title ? `<span class="dm-contact-title">${esc(c.title)}</span>` : ''}
-            ${c.phone ? `<a href="tel:${esc(c.phone)}" class="dm-contact-phone">📞 ${esc(c.phone)}</a>` : ''}
-            ${c.email ? `<a href="mailto:${esc(c.email)}" class="dm-contact-email">✉ ${esc(c.email)}</a>` : ''}
-          </div>`).join('');
+        staffPanel = contacts.map(c => {
+          const initials = (c.name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+          return `<div class="dm-contact-card">
+            <div class="dm-card-top">
+              <div class="dm-avatar">${esc(initials)}</div>
+              <div class="dm-card-identity">
+                <div class="dm-name">${esc(c.name || '—')}</div>
+                ${c.title ? `<div class="dm-title">${esc(c.title)}</div>` : ''}
+              </div>
+            </div>
+            <div class="dm-card-contacts">
+              ${c.phone ? `<a href="tel:${esc(c.phone)}" class="dm-contact-item dm-phone">
+                <span class="dm-contact-icon">📞</span>
+                <span class="dm-contact-val">${esc(c.phone)}</span>
+              </a>` : '<span class="dm-contact-missing">No phone found</span>'}
+              ${c.email ? `<a href="mailto:${esc(c.email)}" class="dm-contact-item dm-email">
+                <span class="dm-contact-icon">✉</span>
+                <span class="dm-contact-val">${esc(c.email)}</span>
+              </a>` : '<span class="dm-contact-missing">No email found</span>'}
+            </div>
+          </div>`;
+        }).join('');
       } else {
         staffPanel = renderStaffDirectory(lead);
       }

@@ -184,6 +184,17 @@
                 <span>Score with Claude AI</span>
               </label>
             </div>
+            <div class="form-group">
+              <label class="form-label">Staff Finder Method</label>
+              <div class="method-toggle" id="enrichMethodToggle">
+                <button class="method-btn active" data-method="claude" type="button">
+                  ⚡ Claude Direct <span class="method-tag">Fast · Free</span>
+                </button>
+                <button class="method-btn" data-method="apify" type="button">
+                  🕷 Apify Crawler <span class="method-tag">JS sites · ~30s</span>
+                </button>
+              </div>
+            </div>
             <div class="form-group form-group--action">
               <button class="btn-preview" id="btnPreviewScrape">🔍 Preview</button>
               <button class="btn-run" id="btnRunScrape">▶ Run Scrape</button>

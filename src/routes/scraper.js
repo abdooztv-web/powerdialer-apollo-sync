@@ -2,13 +2,17 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
-const { enrichWebsite } = require('../enrichment/websiteEnricher');
+const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
 const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId, getRunResult } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const logger = require('../utils/logger');
 
 // Active scrape jobs tracked in memory (runId -> status)
 const activeJobs = new Map();
+
+// Active Apify enrich jobs tracked in memory (enrichRunId -> { leadId, status, datasetId })
+// Note: used only for same-instance polling; DB is the source of truth for completion
+const enrichJobs = new Map();
 
 
 function fallbackScore(lead) {
@@ -217,11 +221,11 @@ router.post('/skip', async (req, res) => {
 });
 
 // POST /api/scraper/enrich/start
-// Body: { leadId }
-// Directly fetches the church website pages and extracts contacts via Claude.
-// No Apify needed — returns contacts synchronously and immediately marks status DONE.
+// Body: { leadId, method }
+//   method='claude' (default) — synchronous direct HTTP fetch, returns contacts immediately
+//   method='apify'            — starts Apify website-content-crawler, returns enrichRunId for polling
 router.post('/enrich/start', async (req, res) => {
-  const { leadId } = req.body;
+  const { leadId, method = 'claude' } = req.body;
   if (!leadId) return res.status(400).json({ success: false, error: 'leadId is required' });
 
   try {
@@ -230,26 +234,85 @@ router.post('/enrich/start', async (req, res) => {
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (!lead.website) return res.status(400).json({ success: false, error: 'Lead has no website' });
 
-    logger.info('Enriching website directly', { leadId, website: lead.website });
+    if (method === 'apify') {
+      // ── APIFY MODE: async start → poll /enrich/status/:runId ──
+      if (!process.env.APIFY_API_TOKEN) {
+        return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+      }
+      const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
+      enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId });
+      await updateLead(leadId, { enrichRunId });
+      logger.info('Apify enrich started', { enrichRunId, leadId, website: lead.website });
+      return res.json({ success: true, status: 'RUNNING', enrichRunId });
+    }
 
+    // ── CLAUDE DIRECT MODE: synchronous, contacts returned immediately ──
+    logger.info('Claude direct enrich', { leadId, website: lead.website });
     const contacts = await enrichWebsite(lead.website, lead.name);
+    await updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+    logger.info('Claude enrich complete', { leadId, contactCount: contacts.length });
+    return res.json({ success: true, status: 'DONE', contacts, contactCount: contacts.length });
 
-    await updateLead(leadId, {
-      contacts: JSON.stringify(contacts),
-      enrichedAt: new Date().toISOString(),
-    });
-
-    logger.info('Enrich complete', { leadId, contactCount: contacts.length });
-    res.json({ success: true, status: 'DONE', contacts, contactCount: contacts.length });
   } catch (err) {
     logger.error('Enrich failed', { error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// GET /api/scraper/enrich/status/:enrichRunId  (kept for backward compatibility — not used anymore)
+// GET /api/scraper/enrich/status/:enrichRunId
+// Used by Apify mode to poll completion. DB-backed: if lead already has enrichedAt, returns DONE.
 router.get('/enrich/status/:enrichRunId', async (req, res) => {
-  res.json({ success: true, status: 'DONE', contactCount: 0 });
+  const { enrichRunId } = req.params;
+  try {
+    // DB-backed idempotency: check if this lead was already enriched (survives Vercel cold starts)
+    const { leads } = await getLeads({ limit: 5000 });
+    const lead = leads.find(l => l.enrichRunId === enrichRunId);
+
+    if (lead && lead.enrichedAt) {
+      // Already processed — return contacts from DB
+      let contacts = lead.contacts || [];
+      if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
+      return res.json({ success: true, status: 'DONE', contactCount: contacts.length });
+    }
+
+    // Check Apify status
+    const apifyStatus = await getEnrichStatus(enrichRunId);
+
+    if (apifyStatus.status === 'SUCCEEDED') {
+      const job = enrichJobs.get(enrichRunId) || {};
+      const leadId = job.leadId || (lead && lead.id);
+
+      if (!leadId) {
+        return res.json({ success: true, status: 'DONE', contactCount: 0 });
+      }
+
+      // Extract contacts from dataset and save — mark as PROCESSING in memory
+      enrichJobs.set(enrichRunId, { ...job, status: 'PROCESSING' });
+
+      const churchName = lead ? lead.name : '';
+      extractContactsFromDataset(apifyStatus.datasetId || job.datasetId, churchName)
+        .then(contacts => {
+          updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'DONE', contactCount: contacts.length });
+          logger.info('Apify enrich complete', { enrichRunId, leadId, contactCount: contacts.length });
+        })
+        .catch(err => {
+          enrichJobs.set(enrichRunId, { ...enrichJobs.get(enrichRunId), status: 'ERROR', error: err.message });
+        });
+
+      return res.json({ success: true, status: 'PROCESSING' });
+    }
+
+    if (apifyStatus.status === 'FAILED' || apifyStatus.status === 'ABORTED') {
+      return res.json({ success: true, status: 'ERROR', error: 'Apify run ' + apifyStatus.status });
+    }
+
+    const memStatus = (enrichJobs.get(enrichRunId) || {}).status || apifyStatus.status;
+    return res.json({ success: true, status: memStatus });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // GET /api/scraper/export
