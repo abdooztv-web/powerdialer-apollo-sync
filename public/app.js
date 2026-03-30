@@ -448,14 +448,25 @@ async function startEnrich(leadId) {
     const res = await fetch('/api/scraper/enrich/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ leadId }),
+      body: JSON.stringify({ leadId, method: enrichMethod }),
     });
     const data = await res.json();
     if (!data.success) {
+      enrichPollers.delete(leadId);
+      renderActiveList();
       alert('Enrich failed: ' + data.error);
       return;
     }
 
+    // Claude direct mode — done immediately
+    if (data.status === 'DONE') {
+      enrichPollers.delete(leadId);
+      fetchLeads();
+      fetchScraperStats();
+      return;
+    }
+
+    // Apify mode — start polling
     const enrichRunId = data.enrichRunId;
     const intervalId = setInterval(() => pollEnrichStatus(leadId, enrichRunId), 3000);
     enrichPollers.set(leadId, { enrichRunId, intervalId });
@@ -610,8 +621,29 @@ function initScraper() {
   // Bulk skip
   document.getElementById('btnBulkSkip').addEventListener('click', skipSelected);
 
+  // Bulk delete
+  document.getElementById('btnBulkDelete').addEventListener('click', deleteSelected);
+
   // Export CSV
   document.getElementById('btnExportCSV').addEventListener('click', exportCSV);
+
+  // Batch find staff
+  document.getElementById('btnBulkEnrich').addEventListener('click', runBulkEnrich);
+  document.getElementById('btnBulkCancel').addEventListener('click', () => {
+    if (batchPollTimer) { clearInterval(batchPollTimer); batchPollTimer = null; }
+    batchRunId = null;
+    document.getElementById('batchProgress').style.display = 'none';
+    resetBulkBtn();
+  });
+
+  // Enrich method toggle (claude / apify)
+  initEnrichMethodToggle();
+
+  // Sidebar lists nav — event delegation
+  document.getElementById('listsNav').addEventListener('click', e => {
+    const btn = e.target.closest('[data-list-id]');
+    if (btn) setActiveList(btn.dataset.listId);
+  });
 
   // Select All
   document.getElementById('selectAllLeads').addEventListener('change', function () {
@@ -770,7 +802,9 @@ async function fetchLeads() {
     const data = await res.json();
     if (data.success) {
       currentLeads = data.leads;
-      renderLeadCards(data.leads, data.total);
+      currentPage = 1;
+      renderListsNav();
+      renderActiveList();
     }
   } catch { /* silent */ }
 }
@@ -847,11 +881,72 @@ function renderStaffDirectory(lead) {
 function renderLeadCards(leads) {
   const container = document.getElementById('leadsList');
   if (!leads || !leads.length) {
+    const emptyMsgs = {
+      'no-website':       ['📵', 'No call-first leads yet', 'Run a scrape to find churches without websites'],
+      'has-website':      ['🌐', 'No website leads yet', 'Run a scrape and filter for churches with websites'],
+      'decision-makers':  ['👤', 'No decision makers found yet', 'Click "Find Staff for All" or import from a denomination directory'],
+    };
+    const [icon, title, sub] = emptyMsgs[activeListId] || ['🔍', 'No leads match your filters', 'Try adjusting your filters'];
     container.innerHTML = `<div class="empty-state">
-      <div class="empty-icon">🔍</div>
-      <div class="empty-title">No leads match your filters</div>
-      <div class="empty-sub">Try adjusting the score range or location filter</div>
+      <div class="empty-icon">${icon}</div>
+      <div class="empty-title">${title}</div>
+      <div class="empty-sub">${sub}</div>
     </div>`;
+    return;
+  }
+
+  // Decision Makers list — compact contact cards
+  if (activeListId === 'decision-makers') {
+    const html = leads.map(lead => {
+      let contacts = lead.contacts || [];
+      if (typeof contacts === 'string') { try { contacts = JSON.parse(contacts); } catch { contacts = []; } }
+      const isSelected = selectedLeadIds.has(lead.id);
+      const contactCards = contacts.map(c => {
+        const initials = (c.name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+        return `<div class="dm-contact-card">
+          <div class="dm-card-top">
+            <div class="dm-avatar">${esc(initials)}</div>
+            <div>
+              <div class="dm-name">${esc(c.name || '—')}</div>
+              <div class="dm-title">${esc(c.title || 'Pastor')}</div>
+            </div>
+          </div>
+          <div class="dm-card-contacts">
+            ${c.phone ? `<div class="dm-contact-item dm-phone">📞 ${esc(c.phone)}</div>` : ''}
+            ${c.email ? `<div class="dm-contact-item dm-email">✉ ${esc(c.email)}</div>` : ''}
+            ${!c.phone && !c.email ? `<div class="dm-contact-missing">No direct contact info</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="lead-card dm-lead-card" data-lead-id="${esc(lead.id)}">
+        <div class="lead-card-header">
+          <input type="checkbox" class="lead-checkbox" data-lead-id="${esc(lead.id)}" ${isSelected ? 'checked' : ''}>
+          <div class="lead-title-row">
+            <span class="lead-name">${esc(lead.name)}</span>
+            ${lead.denomination ? `<span class="method-tag" style="margin-left:6px">${esc(lead.denomination)}</span>` : ''}
+          </div>
+        </div>
+        <div class="lead-meta">
+          ${lead.city || lead.state ? `<span>${esc([lead.city, lead.state].filter(Boolean).join(', '))}</span><span class="lead-meta-sep">·</span>` : ''}
+          ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
+          ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
+        </div>
+        <div class="dm-contacts-grid">${contactCards}</div>
+        <div class="lead-actions" id="lead-actions-${esc(lead.id)}">
+          <div class="dropdown" id="lead-seq-dd-${esc(lead.id)}">
+            <button class="btn-seq" data-action="open-seq" data-lead-id="${esc(lead.id)}">→ Add to Sequence ▾</button>
+            <div class="dropdown-menu" id="lead-seq-menu-${esc(lead.id)}">
+              ${sequences.filter(s => s.active).map(s =>
+                `<div class="dropdown-item" data-action="push-lead" data-lead-id="${esc(lead.id)}" data-seq-id="${esc(s.id)}" data-seq-name="${esc(s.name)}">${esc(s.name)}</div>`
+              ).join('')}
+            </div>
+          </div>
+          <button class="btn-skip" data-action="skip-lead" data-lead-id="${esc(lead.id)}">Skip</button>
+          <button class="btn-delete-single" data-action="delete-lead" data-lead-id="${esc(lead.id)}">🗑</button>
+        </div>
+      </div>`;
+    }).join('');
+    container.innerHTML = html;
     return;
   }
 
@@ -945,6 +1040,15 @@ function handleLeadAction(e) {
 
   if (action === 'find-staff') {
     startEnrich(leadId);
+  }
+
+  if (action === 'delete-lead') {
+    if (!confirm('Delete this lead? This cannot be undone.')) return;
+    fetch('/api/scraper/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [leadId] }),
+    }).then(() => { fetchLeads(); fetchScraperStats(); });
   }
 }
 
@@ -1061,6 +1165,25 @@ async function skipSelected() {
   updateBulkBar();
   fetchLeads();
   fetchScraperStats();
+}
+
+async function deleteSelected() {
+  if (!selectedLeadIds.size) return;
+  if (!confirm(`Delete ${selectedLeadIds.size} selected lead(s)? This cannot be undone.`)) return;
+  const ids = Array.from(selectedLeadIds);
+  try {
+    await fetch('/api/scraper/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    selectedLeadIds.clear();
+    updateBulkBar();
+    fetchLeads();
+    fetchScraperStats();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+  }
 }
 
 function exportCSV() {

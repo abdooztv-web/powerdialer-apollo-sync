@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { runGoogleMapsScrape, getJobStatus, fetchResults } = require('../scrapers/apify');
 const { scoreLeads } = require('../enrichment/scorer');
-const { startEnrichCrawl, getEnrichStatus, extractContactsFromDataset } = require('../enrichment/websiteEnricher');
-const { saveLeads, getLeads, updateLead, getStats, exportCSV, generateId } = require('../store/leads');
+const { enrichWebsite, startEnrichCrawl, getEnrichStatus, extractContactsFromDataset,
+        startBatchEnrichCrawl, fetchAllDatasetItems, groupItemsByDomain, extractContactsForChurch, getDomain } = require('../enrichment/websiteEnricher');
+const { saveLeads, getLeads, updateLead, deleteLeads, getStats, exportCSV, generateId,
+        getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const { DENOMINATIONS, importFromDirectory } = require('../enrichment/denominationDirectories');
 const logger = require('../utils/logger');
@@ -16,6 +18,9 @@ const enrichJobs = new Map();
 
 // Directory import jobs
 const directoryJobs = new Map();
+
+// Batch enrich jobs: batchRunId -> { domainToLeadId, datasetId, status, items? }
+const batchJobs = new Map();
 
 function fallbackScore(lead) {
   let score = 0;
@@ -56,7 +61,16 @@ router.get('/status/:runId', async (req, res) => {
     const job = activeJobs.get(runId) || {};
     const apifyStatus = await getJobStatus(runId);
 
-    if (apifyStatus.status === 'SUCCEEDED' && !job.scored) {
+    if (apifyStatus.status === 'SUCCEEDED') {
+      // DB-backed dedup: if leads already saved for this runId (Vercel cold-start safe), return immediately
+      const alreadySaved = await getRunResult(runId);
+      if (alreadySaved > 0) {
+        return res.json({ success: true, status: 'DONE', count: alreadySaved, skipped: 0, total: alreadySaved });
+      }
+      if (job.scored) {
+        return res.json({ success: true, status: job.status || 'PROCESSING', count: job.count || 0, skipped: job.skipped || 0 });
+      }
+
       // Mark scored immediately to prevent double-processing on concurrent polls
       activeJobs.set(runId, { ...job, status: 'PROCESSING', scored: true });
 
@@ -81,7 +95,7 @@ router.get('/status/:runId', async (req, res) => {
           scored = withIds.map(l => ({ ...l, score: fallbackScore(l), scoreReason: 'Auto-scored (no API key)', suggestedSequence: 'skip' }));
         }
 
-        const { added, skipped } = await saveLeads(scored);
+        const { added, skipped } = await saveLeads(scored, runId);
         activeJobs.set(runId, { ...job, status: 'DONE', scored: true, count: added, skipped });
         logger.info('Scrape complete', { runId, total: raw.length, added, skipped });
         return res.json({ success: true, status: 'DONE', count: added, skipped, total: raw.length });
@@ -208,34 +222,51 @@ router.post('/skip', async (req, res) => {
   res.json({ success: true, skipped: ids.length });
 });
 
+// POST /api/scraper/delete
+router.post('/delete', async (req, res) => {
+  const { ids = [] } = req.body;
+  if (!ids.length) return res.status(400).json({ success: false, error: 'No IDs provided' });
+  try {
+    const count = await deleteLeads(ids);
+    logger.info('Leads deleted', { count });
+    res.json({ success: true, deleted: count });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/scraper/enrich/start
-// Body: { leadId }  — kicks off Apify website-content-crawler for lead's website
+// Body: { leadId, method }  method='claude' (default, sync) | method='apify' (async)
 router.post('/enrich/start', async (req, res) => {
-  const { leadId } = req.body;
+  const { leadId, method = 'claude' } = req.body;
   if (!leadId) return res.status(400).json({ success: false, error: 'leadId is required' });
 
   try {
-    // Look up the lead to get its website
-    const { leads } = await getLeads({});
+    const { leads } = await getLeads({ limit: 5000 });
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
     if (!lead.website) return res.status(400).json({ success: false, error: 'Lead has no website' });
 
-    if (!process.env.APIFY_API_TOKEN) {
-      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+    if (method === 'apify') {
+      if (!process.env.APIFY_API_TOKEN) {
+        return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+      }
+      const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
+      enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId });
+      await updateLead(leadId, { enrichRunId });
+      logger.info('Apify enrich started', { enrichRunId, leadId });
+      return res.json({ success: true, status: 'RUNNING', enrichRunId });
     }
 
-    const { enrichRunId, datasetId } = await startEnrichCrawl(lead.website);
+    // Claude direct mode — synchronous, returns contacts immediately
+    logger.info('Claude direct enrich', { leadId, website: lead.website });
+    const contacts = await enrichWebsite(lead.website, lead.name);
+    await updateLead(leadId, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+    logger.info('Claude enrich complete', { leadId, contactCount: contacts.length });
+    return res.json({ success: true, status: 'DONE', contacts, contactCount: contacts.length });
 
-    enrichJobs.set(enrichRunId, { leadId, status: 'RUNNING', datasetId, startedAt: new Date().toISOString() });
-
-    // Persist enrichRunId on the lead record
-    await updateLead(leadId, { enrichRunId });
-
-    logger.info('Enrich crawl started', { enrichRunId, leadId, website: lead.website });
-    res.json({ success: true, enrichRunId, leadId });
   } catch (err) {
-    logger.error('Failed to start enrich crawl', { error: err.message });
+    logger.error('Enrich failed', { error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -281,6 +312,79 @@ router.get('/enrich/status/:enrichRunId', async (req, res) => {
       error: job.error || null,
     });
   } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/scraper/enrich/batch
+router.post('/enrich/batch', async (req, res) => {
+  try {
+    if (!process.env.APIFY_API_TOKEN) {
+      return res.status(400).json({ success: false, error: 'APIFY_API_TOKEN is not configured' });
+    }
+    const { leads: allLeads } = await getLeads({ hasWebsite: 'true', limit: 2000 });
+    const toEnrich = allLeads.filter(l => !!l.website);
+    if (!toEnrich.length) {
+      return res.json({ success: false, error: 'No leads with websites found. Run a scrape first.' });
+    }
+    const { batchRunId, datasetId, domainToLeadId } = await startBatchEnrichCrawl(toEnrich);
+    batchJobs.set(batchRunId, { domainToLeadId, datasetId, status: 'RUNNING', total: toEnrich.length });
+    await markBatchLeads(toEnrich.map(l => l.id), batchRunId);
+    const urlCount = Object.keys(domainToLeadId).length * 6;
+    logger.info('Batch enrich started', { batchRunId, leads: toEnrich.length });
+    res.json({ success: true, batchRunId, leadCount: toEnrich.length, urlCount });
+  } catch (err) {
+    logger.error('Batch enrich start failed', { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET /api/scraper/enrich/batch/status/:batchRunId
+router.get('/enrich/batch/status/:batchRunId', async (req, res) => {
+  const { batchRunId } = req.params;
+  try {
+    const { total, done } = await getBatchProgress(batchRunId);
+    if (total > 0 && done >= total) {
+      return res.json({ success: true, status: 'DONE', total, done });
+    }
+    let job = batchJobs.get(batchRunId);
+    const apifyStatus = await getEnrichStatus(batchRunId);
+
+    if (apifyStatus.status === 'RUNNING' || apifyStatus.status === 'READY') {
+      return res.json({ success: true, status: 'CRAWLING', total, done });
+    }
+    if (apifyStatus.status === 'FAILED' || apifyStatus.status === 'ABORTED') {
+      return res.json({ success: true, status: 'ERROR', error: 'Apify run ' + apifyStatus.status });
+    }
+    if (apifyStatus.status === 'SUCCEEDED') {
+      if (!job || !job.items) {
+        const items = await fetchAllDatasetItems(apifyStatus.datasetId || (job && job.datasetId));
+        const itemsByDomain = groupItemsByDomain(items);
+        job = { ...(job || { domainToLeadId: {}, total }), items, itemsByDomain, status: 'PROCESSING' };
+        batchJobs.set(batchRunId, job);
+      }
+      const { leads: batchLeads } = await getLeads({ limit: 2000 });
+      const pending = batchLeads.filter(l => l.batchEnrichRunId === batchRunId && !l.enrichedAt);
+      if (!pending.length) {
+        return res.json({ success: true, status: 'DONE', total, done });
+      }
+      const chunk = pending.slice(0, 4);
+      await Promise.all(chunk.map(async lead => {
+        try {
+          const domain = getDomain(lead.website || '');
+          const churchItems = (job.itemsByDomain || {})[domain] || [];
+          const contacts = churchItems.length ? await extractContactsForChurch(churchItems, lead.name) : [];
+          await updateLead(lead.id, { contacts: JSON.stringify(contacts), enrichedAt: new Date().toISOString() });
+        } catch {
+          await updateLead(lead.id, { enrichedAt: new Date().toISOString(), contacts: '[]' });
+        }
+      }));
+      const newDone = done + chunk.length;
+      return res.json({ success: true, status: pending.length > chunk.length ? 'PROCESSING' : 'DONE', total, done: newDone, pending: pending.length - chunk.length });
+    }
+    return res.json({ success: true, status: 'CRAWLING', total, done });
+  } catch (err) {
+    logger.error('Batch status failed', { batchRunId, error: err.message });
     res.status(500).json({ success: false, error: err.message });
   }
 });
