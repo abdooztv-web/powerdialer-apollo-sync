@@ -438,9 +438,163 @@ let scrapePollTimer = null;
 let selectedLeadIds = new Set();
 let currentLeadFilters = {};
 let currentLeads = []; // all leads currently loaded in the browser
+let activeListId = 'no-website';
+let currentPage = 1; // 'no-website' | 'has-website' | 'decision-makers'
+
+const SCRAPER_LISTS = [
+  { id: 'no-website',       label: 'No Website',        dot: '#f59e0b', filter: l => !l.website || l.website === '' },
+  { id: 'has-website',      label: 'Has Website',        dot: '#3b82f6', filter: l => !!(l.website && l.website !== '') },
+  { id: 'decision-makers',  label: 'Decision Makers',    dot: '#16a34a', filter: l => {
+      let c = l.contacts || [];
+      if (typeof c === 'string') { try { c = JSON.parse(c); } catch { c = []; } }
+      return Array.isArray(c) && c.length > 0;
+  }},
+];
+
+function getActiveListLeads() {
+  const list = SCRAPER_LISTS.find(l => l.id === activeListId);
+  return list ? currentLeads.filter(list.filter) : currentLeads;
+}
+
+function setActiveList(id) {
+  activeListId = id;
+  currentPage = 1;
+  renderListsNav();
+  renderActiveList();
+}
+
+function renderListsNav() {
+  const nav = document.getElementById('listsNav');
+  if (!nav) return;
+  nav.innerHTML = SCRAPER_LISTS.map(list => {
+    const count = currentLeads.filter(list.filter).length;
+    const isActive = list.id === activeListId;
+    return `<button class="list-nav-item${isActive ? ' active' : ''}" data-list-id="${list.id}">
+      <span class="list-dot" style="background:${list.dot}"></span>
+      <span class="list-item-name">${list.label}</span>
+      <span class="list-item-count">${count}</span>
+    </button>`;
+  }).join('');
+
+  // Show/hide the sidebar lists panel
+  const panel = document.getElementById('sidebarLists');
+  if (panel) panel.style.display = currentLeads.length ? '' : 'none';
+
+  // Update page title
+  const titleEl = document.getElementById('scraperListTitle');
+  const subEl   = document.getElementById('scraperListSub');
+  const active  = SCRAPER_LISTS.find(l => l.id === activeListId);
+  const count   = getActiveListLeads().length;
+  if (titleEl && active) titleEl.textContent = active.label;
+  if (subEl)  subEl.textContent = `${count} lead${count !== 1 ? 's' : ''}`;
+}
+
+function renderActiveList() {
+  const leads = getActiveListLeads();
+  renderLeadCards(leads);
+}
 
 // enrichPollers: Map<leadId -> { enrichRunId, intervalId }>
 const enrichPollers = new Map();
+
+// ── ENRICH METHOD TOGGLE (Claude / Apify) ────────────────────
+let enrichMethod = 'claude'; // default
+
+function initEnrichMethodToggle() {
+  const toggle = document.getElementById('enrichMethodToggle');
+  if (!toggle) return;
+  toggle.addEventListener('click', e => {
+    const btn = e.target.closest('.method-btn');
+    if (!btn) return;
+    enrichMethod = btn.dataset.method;
+    toggle.querySelectorAll('.method-btn').forEach(b => b.classList.toggle('active', b.dataset.method === enrichMethod));
+  });
+  // Set initial active state
+  toggle.querySelectorAll('.method-btn').forEach(b => b.classList.toggle('active', b.dataset.method === enrichMethod));
+}
+
+// ── BATCH ENRICH ─────────────────────────────────────────────
+let batchRunId = null;
+let batchPollTimer = null;
+
+function resetBulkBtn() {
+  const btn = document.getElementById('btnBulkEnrich');
+  if (btn) { btn.disabled = false; btn.textContent = '🕷 Batch Find Decision Makers'; }
+  const cancel = document.getElementById('btnBulkCancel');
+  if (cancel) cancel.style.display = 'none';
+}
+
+async function runBulkEnrich() {
+  const btn = document.getElementById('btnBulkEnrich');
+  const cancel = document.getElementById('btnBulkCancel');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting…'; }
+  if (cancel) cancel.style.display = '';
+
+  const progressCard = document.getElementById('batchProgress');
+  if (progressCard) progressCard.style.display = '';
+  updateBatchProgress(0, 1, 'STARTING');
+
+  try {
+    const res = await fetch('/api/scraper/enrich/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!data.success) { resetBulkBtn(); alert('Batch failed: ' + (data.error || 'unknown')); return; }
+    if (data.leadCount === 0) { resetBulkBtn(); alert('No un-enriched leads with websites found.'); return; }
+
+    batchRunId = data.batchRunId;
+    if (btn) btn.textContent = `⏳ Crawling ${data.leadCount} churches…`;
+    batchPollTimer = setInterval(() => pollBatchStatus(data.leadCount), 5000);
+  } catch (err) {
+    resetBulkBtn();
+    alert('Batch error: ' + err.message);
+  }
+}
+
+async function pollBatchStatus(total) {
+  if (!batchRunId) return;
+  try {
+    const res = await fetch('/api/scraper/enrich/batch/status/' + batchRunId);
+    const data = await res.json();
+
+    if (data.status === 'CRAWLING') {
+      updateBatchProgress(0, total, 'CRAWLING');
+    } else if (data.status === 'PROCESSING') {
+      updateBatchProgress(data.done || 0, data.total || total, 'PROCESSING');
+    } else if (data.status === 'DONE') {
+      clearInterval(batchPollTimer);
+      batchPollTimer = null;
+      batchRunId = null;
+      updateBatchProgress(data.total || total, data.total || total, 'DONE');
+      resetBulkBtn();
+      setTimeout(() => {
+        const progressCard = document.getElementById('batchProgress');
+        if (progressCard) progressCard.style.display = 'none';
+      }, 3000);
+      fetchLeads();
+      fetchScraperStats();
+    } else if (data.status === 'FAILED') {
+      clearInterval(batchPollTimer);
+      batchPollTimer = null;
+      batchRunId = null;
+      resetBulkBtn();
+      alert('Batch crawl failed on Apify.');
+    }
+  } catch { /* silent poll errors */ }
+}
+
+function updateBatchProgress(done, total, phase) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const bar = document.getElementById('batchProgressBar');
+  const label = document.getElementById('batchProgressLabel');
+  if (bar) bar.style.width = pct + '%';
+  if (label) {
+    const msgs = { STARTING: 'Starting…', CRAWLING: 'Apify crawling church websites…', PROCESSING: `Processing ${done} / ${total} churches…`, DONE: `✅ Done! Processed ${total} churches. Check the Decision Makers list.` };
+    label.textContent = msgs[phase] || `${done} / ${total}`;
+  }
+}
 
 // ── ENRICH: WEBSITE CRAWLER POLLING ──────────────────────────
 async function startEnrich(leadId) {
