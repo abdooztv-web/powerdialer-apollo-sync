@@ -66,6 +66,8 @@ h1, h2, h3, .display {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
+  max-width: 100vw;
+  overflow-x: hidden;
 }
 
 /* ── SIDEBAR ─────────────────────────────── */
@@ -136,7 +138,15 @@ h1, h2, h3, .display {
 .sidebar-meta { font-size: 11px; color: var(--text-faint); padding: 0 4px; }
 
 /* ── MAIN ────────────────────────────────── */
-.main { display: flex; flex-direction: column; min-height: 100vh; }
+/* min-width:0 is critical in CSS Grid — prevents 1fr cell from overflowing */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-width: 0;
+  overflow-x: hidden;
+  width: 100%;
+}
 
 /* ── TAB NAV ─────────────────────────────── */
 .tab-nav {
@@ -199,7 +209,7 @@ h1, h2, h3, .display {
 .btn-outline:hover { border-color: var(--text-secondary); color: var(--text-primary); }
 
 /* ── PAGES ───────────────────────────────── */
-.page { display: none; padding: 32px; flex: 1; }
+.page { display: none; padding: 32px; flex: 1; min-width: 0; max-width: 100%; overflow-x: hidden; box-sizing: border-box; }
 .page.active { display: block; }
 
 .page-header {
@@ -1428,3 +1438,73 @@ h1, h2, h3, .display {
   color: var(--text-muted);
   margin-top: 4px;
 }
+
+/* ── OVERFLOW CONTAINMENT ────────────────────────────────────── */
+/* Prevent any scraper content from bursting past the viewport   */
+#page-scraper,
+#leadsList,
+.scraper-config,
+.filter-bar,
+.bulk-enrich-bar,
+.batch-progress-card,
+.lead-card,
+.dm-contacts-grid {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* Lead meta row: never overflow, just truncate */
+.lead-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary, #4b5563);
+  overflow: hidden;
+}
+
+.lead-meta a { color: inherit; text-decoration: none; }
+.lead-meta a:hover { text-decoration: underline; }
+.lead-meta-sep { color: var(--text-faint, #9ca3af); }
+
+/* Sidebar list nav items — stack vertically, never overflow */
+#listsNav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.list-nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #4b5563);
+  width: 100%;
+  text-align: left;
+  transition: all 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.list-nav-item:hover { background: var(--surface-low); color: var(--text-primary); }
+.list-nav-item.active { background: var(--accent-light, #dbeafe); color: var(--accent, #0053db); border-color: rgba(0,83,219,0.2); font-weight: 600; }
+
+.list-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.list-item-count {
+  background: var(--surface-high);
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.list-nav-item.active .list-item-count { background: rgba(0,83,219,0.15); color: var(--accent); }
