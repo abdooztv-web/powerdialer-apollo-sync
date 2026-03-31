@@ -476,9 +476,9 @@ function renderListsNav() {
     </button>`;
   }).join('');
 
-  // Show/hide the sidebar lists panel
+  // Always show the sidebar lists panel
   const panel = document.getElementById('sidebarLists');
-  if (panel) panel.style.display = currentLeads.length ? '' : 'none';
+  if (panel) panel.style.display = '';
 
   // Update page title
   const titleEl = document.getElementById('scraperListTitle');
