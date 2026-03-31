@@ -215,38 +215,62 @@
             <div class="directory-import-title">
               <span class="directory-import-icon">📚</span>
               <div>
-                <div class="directory-import-name">Import from Denomination Directory</div>
-                <div class="directory-import-desc">Pull pastor names, phones &amp; emails directly from official church directories</div>
+                <div class="directory-import-name">Import from OCA Directory</div>
+                <div class="directory-import-desc">Pull clergy names &amp; phones from the Orthodox Church in America directory</div>
               </div>
             </div>
             <span class="directory-import-chevron" id="directoryChevron">▼</span>
           </div>
           <div class="directory-import-body" id="directoryImportBody" style="display:none">
             <div class="directory-form">
-              <div class="form-group">
-                <label class="form-label">Denomination</label>
-                <select id="directoryDenomination" class="form-select">
-                  <option value="">Loading...</option>
+
+              <!-- Source badge -->
+              <div class="dir-source-row">
+                <span class="dir-source-badge">☦️ OCA</span>
+                <div class="dir-source-info">
+                  <div class="dir-source-name">Orthodox Church in America</div>
+                  <div class="dir-source-sub">~1,000 parishes · clergy names · direct phone numbers</div>
+                </div>
+              </div>
+
+              <!-- Timezone selector -->
+              <div class="form-group" style="margin-top:14px">
+                <label class="form-label">Time Zone</label>
+                <select id="directoryTimezone" class="form-select">
+                  <option value="eastern">🌅 Eastern Time — ME, VT, NH, MA, CT, RI, NY, NJ, PA, DE, MD, DC, VA, WV, NC, SC, GA, FL, OH, MI, IN, KY, TN</option>
+                  <option value="central">🌄 Central Time — WI, IL, MN, IA, MO, ND, SD, NE, KS, OK, TX, LA, MS, AL, AR</option>
+                  <option value="mountain">🏔 Mountain Time — MT, WY, CO, NM, AZ, UT, ID</option>
+                  <option value="pacific">🌊 Pacific Time — WA, OR, CA, NV</option>
+                  <option value="alaska">🌨 Alaska — AK</option>
+                  <option value="hawaii">🌺 Hawaii — HI</option>
+                  <option value="all">🇺🇸 All USA — All 50 states + DC</option>
                 </select>
               </div>
-              <div class="form-group">
-                <label class="form-label">Location (State or City) <span style="color:var(--text-muted);font-weight:400">optional</span></label>
-                <input type="text" id="directoryLocation" class="form-input" placeholder="e.g. OH, Ohio, Cleveland OH">
-              </div>
-              <div class="form-group form-group--action">
+
+              <!-- State chips preview -->
+              <div class="dir-state-chips" id="directoryStateChips"></div>
+
+              <div class="form-group form-group--action" style="margin-top:14px">
                 <button class="btn-directory-import" id="btnDirectoryImport">📥 Import Leads</button>
+                <button class="btn-directory-cancel" id="btnDirectoryCancel" style="display:none">✕ Cancel</button>
               </div>
             </div>
-            <div class="directory-progress" id="directoryProgress" style="display:none">
-              <span class="progress-spinner"></span>
-              <span id="directoryProgressMsg">Fetching directory…</span>
+
+            <!-- Live progress -->
+            <div class="dir-progress-wrap" id="directoryProgressWrap" style="display:none">
+              <div class="dir-progress-state" id="dirProgressState">Starting…</div>
+              <div class="batch-progress-track" style="margin:8px 0 4px">
+                <div class="batch-progress-bar" id="dirProgressBar" style="width:0%"></div>
+              </div>
+              <div class="dir-progress-counts" id="dirProgressCounts">0 leads imported</div>
             </div>
+
             <div class="directory-result" id="directoryResult" style="display:none"></div>
+
             <div class="directory-badges" id="directoryBadges">
               <span class="directory-badge directory-badge--orthodox">☦️ OCA</span>
-              <span class="directory-badge directory-badge--orthodox">☦️ GOARCH</span>
-              <span class="directory-badge directory-badge--orthodox">☦️ Antiochian</span>
-              <span class="directory-badge directory-badge--orthodox">☦️ ROCOR</span>
+              <span class="directory-badge directory-badge--orthodox">☦️ GOARCH — coming soon</span>
+              <span class="directory-badge directory-badge--orthodox">☦️ Antiochian — coming soon</span>
               <span class="directory-badge directory-badge--christian">✝️ Coptic</span>
               <span class="directory-badge directory-badge--christian">✝️ SBC</span>
               <span class="directory-badge directory-badge--christian">✝️ Episcopal</span>

@@ -8,6 +8,7 @@ const { saveLeads, getLeads, updateLead, deleteLeads, getStats, exportCSV, gener
         getRunResult, getBatchProgress, markBatchLeads } = require('../store/leads');
 const { findContactByEmail, addToSequence } = require('../handlers/apollo');
 const { DENOMINATIONS, importFromDirectory } = require('../enrichment/denominationDirectories');
+const { TIMEZONES, STATE_NAMES, scrapeStateClergy } = require('../enrichment/ocaScraper');
 const logger = require('../utils/logger');
 
 // Active scrape jobs tracked in memory (runId -> status)
@@ -420,78 +421,60 @@ router.get('/preview', async (req, res) => {
   }
 });
 
-// GET /api/scraper/directory/denominations
-router.get('/directory/denominations', (req, res) => {
-  const list = Object.entries(DENOMINATIONS).map(([id, d]) => ({
+// GET /api/scraper/directory/timezones
+// Returns all timezone options with their state lists
+router.get('/directory/timezones', (req, res) => {
+  const list = Object.entries(TIMEZONES).map(([id, { label, states }]) => ({
     id,
-    name: d.name,
-    icon: d.icon,
-    category: d.category,
+    label,
+    stateCount: states.length,
+    states,
   }));
-  res.json({ success: true, denominations: list });
+  res.json({ success: true, timezones: list });
 });
 
-// POST /api/scraper/directory/import
-// Body: { denomination, location }
-// Synchronously fetches a denomination directory page and saves all churches as leads.
-router.post('/directory/import', async (req, res) => {
-  const { denomination, location } = req.body;
-  if (!denomination) return res.status(400).json({ success: false, error: 'denomination is required' });
+// POST /api/scraper/directory/oca/state
+// Body: { state } — scrapes ONE US state from OCA clergy directory and saves leads.
+// Called repeatedly by the frontend (one state per request) to stay under Vercel timeout.
+router.post('/directory/oca/state', async (req, res) => {
+  const { state } = req.body;
+  if (!state) return res.status(400).json({ success: false, error: 'state is required' });
 
   try {
-    logger.info('Directory import started', { denomination, location });
+    const clergy = await scrapeStateClergy(state.toUpperCase());
 
-    const churches = await importFromDirectory(denomination, location);
-
-    if (!churches.length) {
-      return res.json({ success: true, imported: 0, total: 0, message: 'No churches found for this denomination/location. Try a different state or location.' });
+    if (!clergy.length) {
+      return res.json({ success: true, state, found: 0, saved: 0, skipped: 0 });
     }
 
-    // Build lead objects with contacts pre-populated
-    const leads = churches.map(c => {
-      const contacts = c.pastorName
-        ? [{ name: c.pastorName, title: c.pastorTitle || 'Pastor', phone: null, email: c.email || null }]
-        : [];
-      return {
-        id: generateId(),
-        placeId: null, // will be generated from name+city hash in saveLeads
-        name: c.name,
-        phone: c.phone || null,
-        website: c.website || null,
-        hasWebsite: !!(c.website),
-        category: DENOMINATIONS[denomination]?.category || 'Church',
-        address: c.address || null,
-        city: c.city || null,
-        state: c.state || null,
-        reviewCount: 0,
-        rating: null,
-        score: 7, // directory leads get a high default score
-        scoreReason: `Imported from ${DENOMINATIONS[denomination]?.name || denomination} directory`,
-        suggestedSequence: 'outreach',
-        status: 'new',
-        scrapedAt: new Date().toISOString(),
-        contacts,
-        enrichedAt: contacts.length > 0 ? new Date().toISOString() : null,
-        source: 'directory',
-        denomination,
-      };
-    });
+    // Build lead objects — each clergy entry becomes a lead with contacts pre-filled
+    const leads = clergy.map(c => ({
+      id:          generateId(),
+      name:        c.parishName,
+      phone:       c.phone || null,
+      city:        c.city || null,
+      state:       c.state,
+      address:     c.city ? `${c.city}, ${c.stateName}` : c.stateName,
+      category:    'Orthodox Church',
+      hasWebsite:  false,
+      score:       8,
+      scoreReason: `OCA directory${c.clergyName ? ` — ${c.clergyName}` : ''}`,
+      denomination: 'OCA',
+      source:      'directory-oca',
+      status:      'new',
+      scrapedAt:   new Date().toISOString(),
+      contacts:    c.clergyName
+        ? [{ name: c.clergyName, title: c.clergyTitle || 'Priest', phone: c.phone || null, email: null }]
+        : [],
+      enrichedAt:  c.clergyName ? new Date().toISOString() : null,
+    }));
 
-    const { added, skipped } = await saveLeads(leads, null);
+    const { added, skipped } = await saveLeads(leads);
 
-    logger.info('Directory import complete', { denomination, location, total: churches.length, added, skipped });
-
-    res.json({
-      success: true,
-      imported: added,
-      skipped,
-      total: churches.length,
-      withPastor: churches.filter(c => c.pastorName).length,
-      message: `Imported ${added} churches from ${DENOMINATIONS[denomination]?.name}${location ? ' in ' + location : ''}. ${churches.filter(c => c.pastorName).length} have pastor info.`,
-    });
+    res.json({ success: true, state, found: clergy.length, saved: added, skipped });
   } catch (err) {
-    logger.error('Directory import failed', { denomination, location, error: err.message });
-    res.status(500).json({ success: false, error: err.message });
+    logger.error('[directory/oca/state] error', { state, error: err.message });
+    res.json({ success: false, state, error: err.message, found: 0, saved: 0, skipped: 0 });
   }
 });
 

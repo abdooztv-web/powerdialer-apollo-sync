@@ -657,24 +657,25 @@ async function pollEnrichStatus(leadId, enrichRunId) {
 }
 
 // ── DENOMINATION DIRECTORY IMPORT ───────────────────────────
-async function initDirectoryImport() {
-  // Load denominations into select
-  try {
-    const res = await fetch('/api/scraper/directory/denominations');
-    const data = await res.json();
-    const sel = document.getElementById('directoryDenomination');
-    if (sel && data.denominations) {
-      sel.innerHTML = data.denominations.map(d =>
-        `<option value="${esc(d.id)}">${esc(d.icon)} ${esc(d.name)}</option>`
-      ).join('');
-    }
-  } catch { /* keep default */ }
+// ── TIMEZONE → STATES MAP (matches backend ocaScraper.js) ───────────────────
+const TIMEZONE_STATES = {
+  eastern:  ['ME','VT','NH','MA','CT','RI','NY','NJ','PA','DE','MD','DC','VA','WV','NC','SC','GA','FL','OH','MI','IN','KY','TN'],
+  central:  ['WI','IL','MN','IA','MO','ND','SD','NE','KS','OK','TX','LA','MS','AL','AR'],
+  mountain: ['MT','WY','CO','NM','AZ','UT','ID'],
+  pacific:  ['WA','OR','CA','NV'],
+  alaska:   ['AK'],
+  hawaii:   ['HI'],
+  all:      ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'],
+};
 
+let directoryAbort = false;
+
+function initDirectoryImport() {
   // Toggle expand/collapse
   const toggle = document.getElementById('directoryImportToggle');
   if (toggle) {
     toggle.addEventListener('click', () => {
-      const body = document.getElementById('directoryImportBody');
+      const body    = document.getElementById('directoryImportBody');
       const chevron = document.getElementById('directoryChevron');
       if (!body) return;
       const open = body.style.display !== 'none';
@@ -683,65 +684,99 @@ async function initDirectoryImport() {
     });
   }
 
-  // Import button
-  const btn = document.getElementById('btnDirectoryImport');
-  if (btn) {
-    btn.addEventListener('click', runDirectoryImport);
+  // Timezone change → update state chip preview
+  const tzSel = document.getElementById('directoryTimezone');
+  if (tzSel) {
+    tzSel.addEventListener('change', updateDirectoryStateChips);
+    updateDirectoryStateChips();
   }
+
+  // Import button
+  document.getElementById('btnDirectoryImport')?.addEventListener('click', runDirectoryImport);
+
+  // Cancel button
+  document.getElementById('btnDirectoryCancel')?.addEventListener('click', () => {
+    directoryAbort = true;
+  });
+}
+
+function updateDirectoryStateChips() {
+  const tz     = document.getElementById('directoryTimezone')?.value;
+  const chips  = document.getElementById('directoryStateChips');
+  if (!chips) return;
+  const states = TIMEZONE_STATES[tz] || [];
+  chips.innerHTML = states.map(s => `<span class="state-chip">${s}</span>`).join('');
 }
 
 async function runDirectoryImport() {
-  const denomination = document.getElementById('directoryDenomination')?.value;
-  const location = document.getElementById('directoryLocation')?.value?.trim() || '';
-  const btn = document.getElementById('btnDirectoryImport');
-  const progress = document.getElementById('directoryProgress');
-  const result = document.getElementById('directoryResult');
+  const tz     = document.getElementById('directoryTimezone')?.value;
+  const states = TIMEZONE_STATES[tz] || [];
+  if (!states.length) return;
 
-  if (!denomination) { alert('Please select a denomination'); return; }
+  const btn         = document.getElementById('btnDirectoryImport');
+  const cancelBtn   = document.getElementById('btnDirectoryCancel');
+  const progressWrap = document.getElementById('directoryProgressWrap');
+  const progressBar  = document.getElementById('dirProgressBar');
+  const progressState = document.getElementById('dirProgressState');
+  const progressCounts = document.getElementById('dirProgressCounts');
+  const result       = document.getElementById('directoryResult');
 
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Importing…'; }
-  if (progress) { progress.style.display = 'flex'; }
-  if (result) { result.style.display = 'none'; }
+  directoryAbort = false;
+  if (btn)       { btn.disabled = true; btn.textContent = '⏳ Importing…'; }
+  if (cancelBtn) { cancelBtn.style.display = ''; }
+  if (progressWrap) progressWrap.style.display = '';
+  if (result)    result.style.display = 'none';
 
-  try {
-    const res = await fetch('/api/scraper/directory/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ denomination, location }),
-    });
-    const data = await res.json();
+  let totalImported = 0;
+  let totalFound    = 0;
+  let totalSkipped  = 0;
 
-    if (progress) progress.style.display = 'none';
+  for (let i = 0; i < states.length; i++) {
+    if (directoryAbort) break;
+    const state = states[i];
+    const pct   = Math.round((i / states.length) * 100);
 
-    if (!data.success) {
-      if (result) {
-        result.style.display = '';
-        result.className = 'directory-result directory-result--error';
-        result.innerHTML = `❌ ${esc(data.error || 'Import failed')}`;
+    if (progressBar)    progressBar.style.width = pct + '%';
+    if (progressState)  progressState.textContent = `🔍 Processing ${state} (${i + 1}/${states.length})…`;
+    if (progressCounts) progressCounts.textContent =
+      `${totalImported} new leads · ${totalFound} found · ${totalSkipped} duplicates`;
+
+    try {
+      const res  = await fetch('/api/scraper/directory/oca/state', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ state }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        totalImported += data.saved  || 0;
+        totalFound    += data.found  || 0;
+        totalSkipped  += data.skipped || 0;
       }
-    } else {
-      if (result) {
-        result.style.display = '';
-        result.className = 'directory-result directory-result--success';
-        result.innerHTML = `
-          ✅ <strong>${data.imported} churches imported</strong> from the directory
-          <br><span style="font-size:12px;opacity:0.8">${data.withPastor || 0} with pastor info · ${data.skipped || 0} duplicates skipped</span>
-        `;
-      }
-      // Refresh leads
-      await fetchLeads();
-      fetchScraperStats();
+    } catch (e) {
+      console.warn(`[directory] Failed ${state}:`, e.message);
     }
-  } catch (err) {
-    if (progress) progress.style.display = 'none';
-    if (result) {
-      result.style.display = '';
-      result.className = 'directory-result directory-result--error';
-      result.innerHTML = `❌ Error: ${esc(err.message)}`;
-    }
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📥 Import Leads'; }
   }
+
+  // Done
+  if (progressBar)   progressBar.style.width = '100%';
+  if (progressState) progressState.textContent = directoryAbort ? '⚠️ Cancelled' : '✅ Complete!';
+  if (btn)       { btn.disabled = false; btn.textContent = '📥 Import Leads'; }
+  if (cancelBtn) cancelBtn.style.display = 'none';
+
+  if (result) {
+    result.style.display = '';
+    result.className = directoryAbort
+      ? 'directory-result directory-result--error'
+      : 'directory-result directory-result--success';
+    result.innerHTML = directoryAbort
+      ? `⚠️ Cancelled — imported ${totalImported} leads before stopping`
+      : `✅ <strong>${totalImported} new leads imported</strong> from OCA directory
+         <br><span style="font-size:12px;opacity:0.8">${totalFound} clergy found · ${totalSkipped} already in your list</span>`;
+  }
+
+  fetchLeads();
+  fetchScraperStats();
 }
 
 // ── SCRAPER INIT ─────────────────────────────────────────────
