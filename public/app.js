@@ -49,16 +49,7 @@ function decisionBadge(action, status) {
   return ['none', '—'];
 }
 
-// ── TAB SWITCHING ────────────────────────────────────────────
-document.querySelectorAll('.tab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('page-' + btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'analytics') fetchAnalytics();
-  });
-});
+// Tab switching removed — Scraper is the only page
 
 // ── CLOSE DROPDOWNS ON OUTSIDE CLICK ────────────────────────
 document.addEventListener('click', function(e) {
@@ -418,14 +409,14 @@ function renderAnalytics(seqs, apiSuccess) {
 }
 
 // ── REFRESH ──────────────────────────────────────────────────
-document.getElementById('btnRefresh').addEventListener('click', fetchActivity);
-document.getElementById('btnRefreshAnalytics').addEventListener('click', fetchAnalytics);
+document.getElementById('btnRefresh').addEventListener('click', () => {
+  fetchLeads();
+  fetchScraperStats();
+});
 
 // ── INIT ─────────────────────────────────────────────────────
 loadSequences().then(() => {
   checkHealth();
-  fetchActivity();
-  setInterval(fetchActivity, POLL_MS);
   setInterval(checkHealth, 30000);
 });
 
@@ -1191,6 +1182,7 @@ function renderLeadCards(leads) {
           ${lead.phone ? `<span>📞 ${esc(lead.phone)}</span><span class="lead-meta-sep">·</span>` : ''}
           ${lead.reviewCount != null ? `<span>★ ${lead.reviewCount} reviews</span>` : ''}
           ${lead.website ? `<span><a href="${esc(lead.website)}" target="_blank" class="lead-website-link">🌐 Website</a></span>` : ''}
+        </div>
         ${lead.scoreReason ? `<div class="lead-reason">Claude: "${esc(lead.scoreReason)}"</div>` : ''}
         ${staffPanel}
         ${actions}

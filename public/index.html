@@ -38,105 +38,12 @@
 
       <!-- TOP NAV TABS -->
       <nav class="tab-nav">
-        <button class="tab-btn active" data-tab="inbox">
-          Inbox
-          <span class="tab-badge" id="inboxBadge" style="display:none">0</span>
-        </button>
-        <button class="tab-btn" data-tab="analytics">Analytics</button>
-        <button class="tab-btn" data-tab="activity">Activity Log</button>
-        <button class="tab-btn" data-tab="scraper">
-          Scraper
-          <span class="tab-badge" id="scraperBadge" style="display:none">0</span>
-        </button>
         <div class="tab-spacer"></div>
         <button class="btn-outline" id="btnRefresh">↻ Refresh</button>
       </nav>
 
-      <!-- ── PAGE: INBOX ───────────────────────────────── -->
-      <div class="page active" id="page-inbox">
-        <div class="page-header">
-          <div>
-            <h1>Webhook Inbox</h1>
-            <p class="page-sub">Incoming calls wait here for your decision — nothing runs in Apollo until you act</p>
-          </div>
-          <div class="stats-row">
-            <div class="mini-stat">
-              <span class="mini-val" id="statPending">0</span>
-              <span class="mini-label">Pending</span>
-            </div>
-            <div class="mini-stat">
-              <span class="mini-val" id="statTotal">0</span>
-              <span class="mini-label">Total</span>
-            </div>
-            <div class="mini-stat mini-stat--green">
-              <span class="mini-val" id="statAdded">0</span>
-              <span class="mini-label">Added</span>
-            </div>
-            <div class="mini-stat mini-stat--red">
-              <span class="mini-val" id="statRemoved">0</span>
-              <span class="mini-label">Removed</span>
-            </div>
-          </div>
-        </div>
-
-        <div id="inboxList">
-          <div class="empty-state">
-            <div class="empty-icon">📭</div>
-            <div class="empty-title">No calls waiting</div>
-            <div class="empty-sub">New calls from PowerDialer will appear here automatically</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── PAGE: ANALYTICS ──────────────────────────── -->
-      <div class="page" id="page-analytics">
-        <div class="page-header">
-          <div>
-            <h1>Sequence Analytics</h1>
-            <p class="page-sub">Live stats pulled from Apollo.io — read only</p>
-          </div>
-          <button class="btn-outline" id="btnRefreshAnalytics">↻ Refresh</button>
-        </div>
-        <div class="analytics-grid" id="analyticsGrid">
-          <div class="empty-state">
-            <div class="empty-icon">📊</div>
-            <div class="empty-title">Loading...</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── PAGE: ACTIVITY LOG ────────────────────────── -->
-      <div class="page" id="page-activity">
-        <div class="page-header">
-          <div>
-            <h1>Activity Log</h1>
-            <p class="page-sub">All processed decisions · last 100 events</p>
-          </div>
-        </div>
-        <div class="card">
-          <div class="table-wrapper">
-            <table class="activity-table">
-              <thead>
-                <tr>
-                  <th>Contact</th>
-                  <th>Disposition</th>
-                  <th>Decision</th>
-                  <th>Sequence</th>
-                  <th>Time</th>
-                </tr>
-              </thead>
-              <tbody id="activityBody">
-                <tr class="empty-row">
-                  <td colspan="5">No decisions yet</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
       <!-- ── PAGE: SCRAPER ─────────────────────────────── -->
-      <div class="page" id="page-scraper">
+      <div class="page active" id="page-scraper">
 
         <!-- Page Header -->
         <div class="page-header">
